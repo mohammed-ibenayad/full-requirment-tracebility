@@ -10,4 +10,4 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 # Import our reporting plugin
-pytest_plugins = ["pytest_results_plugin"]
+#pytest_plugins = ["pytest_results_plugin"]
