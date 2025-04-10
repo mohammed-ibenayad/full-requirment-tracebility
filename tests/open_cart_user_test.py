@@ -12,5 +12,3 @@ class TestOpenCart:
     @pytest.mark.testcase_id("TC-999")
     def test_dummy(self, custom_json_reporter):    # Add the fixture parameter here
         assert True
-        # Explicitly record the test result
-        #custom_json_reporter.record_result("TC-999", "Passed")
