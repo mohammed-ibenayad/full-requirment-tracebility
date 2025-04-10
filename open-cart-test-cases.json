@@ -1,17 +1,26 @@
-[{
+[
+  {
     "id": "TC-999",
     "name": "Test Dummy",
     "description": "Test Dummy",
-    "steps": ["Test Dummy" ],
+    "steps": [
+      "Test Dummy"
+    ],
     "expectedResult": "Test Dummy",
-    "status": "Not Run",
+    "status": "Passed",
     "automationStatus": "Automated",
     "automationPath": "tests/test_dummy.py",
-    "lastExecuted": "",
-    "requirementIds": ["REQ-999"],
+    "lastExecuted": "2025-04-10T17:50:21.243331",
+    "requirementIds": [
+      "REQ-999"
+    ],
     "version": "v1.0",
-    "executedBy": "",
-    "tags": ["DummyCat01", "DummyCat02"],
+    "executedBy": "Pytest",
+    "tags": [
+      "DummyCat01",
+      "DummyCat02"
+    ],
     "priority": "High",
     "estimatedDuration": 1
-  }]
+  }
+]

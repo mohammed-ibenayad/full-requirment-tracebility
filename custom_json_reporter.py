@@ -29,28 +29,39 @@ class CustomJSONReporter:
     def record_result(self, test_id, status):
         self.test_results[test_id] = status
         print(f"\nRecorded test result: {test_id} -> {status}")
+        print(f"Current test results: {self.test_results}")  # Debug print
     
     def save_results(self):
+        print(f"\nAttempting to save results: {len(self.test_results)} results")
         if not self.test_results or not self.test_cases:
+            print("\nNo results or test cases to save")
             return
         
         updates = 0
         for test_id, status in self.test_results.items():
+            print(f"Processing test result for {test_id}")  # Debug print
             if test_id in self.test_case_map:
                 idx = self.test_case_map[test_id]
+                print(f"Found test case at index {idx}")  # Debug print
                 self.test_cases[idx]['status'] = status
                 self.test_cases[idx]['lastExecuted'] = datetime.now().isoformat()
                 if 'executedBy' in self.test_cases[idx]:
                     self.test_cases[idx]['executedBy'] = self.executor
                 updates += 1
+            else:
+                print(f"WARNING: Test ID {test_id} not found in test case map")
         
         if updates > 0:
             try:
+                print(f"Writing {updates} updates to {self.json_file}")  # Debug print
                 with open(self.json_file, 'w') as f:
                     json.dump(self.test_cases, f, indent=2)
                 print(f"\nUpdated {updates} test cases in {self.json_file}")
             except Exception as e:
                 print(f"\nError saving results: {e}")
+                # Print more details about the error
+                import traceback
+                traceback.print_exc()
 
 
 # Global reporter instance
@@ -85,7 +96,9 @@ def get_test_id(item):
     # First check for the testcase_id marker
     marker = item.get_closest_marker("testcase_id")
     if marker and marker.args:
+        print(f"\nFound test ID from marker: {marker.args[0]}")  # Debug print
         return marker.args[0]
+    print(f"\nNo test ID found for {item.nodeid}")  # Debug print
     return None
 
 
@@ -126,6 +139,11 @@ def pytest_runtest_makereport(item, call):
     
     if report.when == "call":
         item.rep_call = report
+        # Debug print
+        test_id = get_test_id(item)
+        if test_id:
+            print(f"\nDetected test ID in makereport: {test_id}")
+            print(f"Test result: {report.outcome}")
     elif report.when == "setup":
         item.rep_setup = report
 
@@ -162,6 +180,9 @@ def pytest_addoption(parser):
 def pytest_sessionfinish(session):
     """Save all test results at the end of the test session"""
     if session.config.getoption("--save-custom-json", False):
-        reporter = get_reporter()
+        # Use explicitly configured file and executor names
+        json_file = session.config.getoption("--custom-json-file", "open-cart-test-cases.json")
+        executor = session.config.getoption("--custom-executor", "Pytest")
+        reporter = get_reporter(json_file, executor)
         reporter.save_results()
         print("\nCustom JSON results saved")
