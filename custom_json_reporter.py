@@ -108,10 +108,26 @@ def custom_json_reporter(request):
     
     # Record result after test completes
     if test_id:
-        # Use a simpler approach to determine pass/fail
-        excinfo = request.node._excinfo
-        result = "Failed" if excinfo else "Passed"
+        # Get result by checking if the test passed
+        result = "Passed"
+        if hasattr(request.node, 'rep_call') and request.node.rep_call.failed:
+            result = "Failed"
+        elif hasattr(request.node, 'rep_setup') and request.node.rep_setup.failed:
+            result = "Failed"
+        
         reporter.record_result(test_id, result)
+
+
+# Add a hook to store test results
+@pytest.hookimpl(tryfirst=True, hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    report = outcome.get_result()
+    
+    if report.when == "call":
+        item.rep_call = report
+    elif report.when == "setup":
+        item.rep_setup = report
 
 
 # Register our options
