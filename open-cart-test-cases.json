@@ -1,6 +1,6 @@
 [
   {
-    "id": "TC-001",
+    "id": "TC_001",
     "name": "Verify that the homepage loads successfully",
     "description": "Verify that the homepage loads successfully and contains expected elements like search box and content area.",
     "steps": [

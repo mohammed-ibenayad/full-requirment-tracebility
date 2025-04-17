@@ -18,8 +18,8 @@ class TestOpenCart:
         # Teardown - close the browser
         driver.quit()
     
-    @pytest.mark.testcase_id("TC-001")
-    def test_homepage_loads(self, browser,custom_json_reporter):
+    #@pytest.mark.testcase_id("TC-001")
+    def test_homepage_loads_TC_001(self, browser,custom_json_reporter):
         """[TC-001] Test that the homepage loads successfully and contains expected elements"""
         # Check that the title is not empty (more flexible than checking for specific text)
         assert browser.title, "Page title should not be empty"
