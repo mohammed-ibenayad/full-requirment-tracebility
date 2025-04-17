@@ -27,7 +27,7 @@
     "estimatedDuration": 1
   },
   {
-    "id": "TC-002",
+    "id": "TC_002",
     "name": "Verify product search functionality",
     "description": "Verify that users can search for products using the search box and relevant results are displayed.",
     "steps": [
@@ -55,7 +55,7 @@
     "estimatedDuration": 2
   },
   {
-    "id": "TC-003",
+    "id": "TC_003",
     "name": "Verify add to cart functionality",
     "description": "Verify that users can add products to the shopping cart from product pages.",
     "steps": [
@@ -85,7 +85,7 @@
     "estimatedDuration": 3
   },
   {
-    "id": "TC-004",
+    "id": "TC_004",
     "name": "Verify user login functionality",
     "description": "Verify that users can log in with valid credentials and access their account area.",
     "steps": [
@@ -115,7 +115,7 @@
     "estimatedDuration": 2
   },
   {
-    "id": "TC-005",
+    "id": "TC_005",
     "name": "Verify add to wishlist functionality",
     "description": "Verify that logged-in users can add products to their wishlist.",
     "steps": [
@@ -143,7 +143,7 @@
     "estimatedDuration": 3
   },
   {
-    "id": "TC-006",
+    "id": "TC_006",
     "name": "Verify remove from wishlist functionality",
     "description": "Verify that logged-in users can remove products from their wishlist.",
     "steps": [
@@ -172,7 +172,7 @@
     "estimatedDuration": 3
   },
   {
-    "id": "TC-007",
+    "id": "TC_007",
     "name": "Verify admin login functionality",
     "description": "Verify that administrators can log in to the admin panel with valid credentials.",
     "steps": [
@@ -200,7 +200,7 @@
     "estimatedDuration": 2
   },
   {
-    "id": "TC-008",
+    "id": "TC_008",
     "name": "Verify admin logout functionality",
     "description": "Verify that administrators can log out from the admin panel.",
     "steps": [
@@ -227,7 +227,7 @@
     "estimatedDuration": 1
   },
   {
-    "id": "TC-009",
+    "id": "TC_009",
     "name": "Verify product deletion functionality",
     "description": "Verify that administrators can delete products from the catalog.",
     "steps": [
@@ -257,7 +257,7 @@
     "estimatedDuration": 3
   },
   {
-    "id": "TC-010",
+    "id": "TC_010",
     "name": "Verify category creation functionality",
     "description": "Verify that administrators can create new product categories.",
     "steps": [

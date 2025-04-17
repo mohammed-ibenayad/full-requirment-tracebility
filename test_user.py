@@ -10,17 +10,24 @@ import time
 class TestOpenCart:
     @pytest.fixture
     def browser(self):
+        options = webdriver.ChromeOptions()
+        options.add_argument('--headless')
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-gpu')
+
         # Setup - create a browser instance
-        driver = webdriver.Chrome()  # You can change to Firefox, Edge, etc.
+        driver = webdriver.Chrome(options=options)  # You can change to Firefox, Edge, etc.
         driver.maximize_window()
+        
         driver.get("http://localhost/opencart/")  # Change URL if your OpenCart is hosted elsewhere
         yield driver
         # Teardown - close the browser
         driver.quit()
     
-    #@pytest.mark.testcase_id("TC-001")
+    #@pytest.mark.testcase_id("TC_001")
     def test_homepage_loads_TC_001(self, browser,custom_json_reporter):
-        """[TC-001] Test that the homepage loads successfully and contains expected elements"""
+        """[TC_001] Test that the homepage loads successfully and contains expected elements"""
         # Check that the title is not empty (more flexible than checking for specific text)
         assert browser.title, "Page title should not be empty"
         
@@ -32,9 +39,9 @@ class TestOpenCart:
         content = browser.find_element(By.ID, "content")
         assert content.is_displayed(), "Content area should be displayed"
     
-    @pytest.mark.testcase_id("TC-002")
-    def test_product_search(self, browser,custom_json_reporter):
-        """[TC-002] Test the product search functionality"""
+    #@pytest.mark.testcase_id("TC_002")
+    def test_product_search_TC_002(self, browser,custom_json_reporter):
+        """[TC_002] Test the product search functionality"""
         # Enter search term
         search_term = "phone"
         search_box = browser.find_element(By.NAME, "search")
@@ -84,9 +91,9 @@ class TestOpenCart:
         except TimeoutException:
             pytest.fail("Search results did not load within the timeout period")
     
-    @pytest.mark.testcase_id("TC-003")
-    def test_add_to_cart(self, browser,custom_json_reporter):
-        """[TC-003] Test adding a product to the cart"""
+    @pytest.mark.testcase_id("TC_003")
+    def test_add_to_cart_TC_003(self, browser,custom_json_reporter):
+        """[TC_003] Test adding a product to the cart"""
         try:
             # First try to navigate to a product category
             category_links = browser.find_elements(By.CSS_SELECTOR, "#menu a")
@@ -181,9 +188,9 @@ class TestOpenCart:
         except Exception as e:
             pytest.fail(f"Failed to add product to cart: {str(e)}")
     
-    @pytest.mark.testcase_id("TC-004")
-    def test_user_login(self, browser,custom_json_reporter):
-        """[TC-004] Test the user login functionality"""
+    @pytest.mark.testcase_id("TC_004")
+    def test_user_login_TC_004(self, browser,custom_json_reporter):
+        """[TC_004] Test the user login functionality"""
         try:
             # Navigate to account/login page
             # First find the My Account dropdown
@@ -450,9 +457,9 @@ class TestOpenCart:
         except Exception as e:
             pytest.fail(f"Failed to complete user login: {str(e)}")
         
-    @pytest.mark.testcase_id("TC-005")
-    def test_wishlist_functionality(self, browser,custom_json_reporter):
-        """[TC-005] Test adding a product to the wishlist"""
+    @pytest.mark.testcase_id("TC_005")
+    def test_wishlist_functionality_TC_005(self, browser,custom_json_reporter):
+        """[TC_005] Test adding a product to the wishlist"""
         try:
             # First, login to the account
             self.login(browser)
@@ -607,9 +614,9 @@ class TestOpenCart:
         except Exception as e:
             pytest.fail(f"Failed to add product to wishlist: {str(e)}")
 
-    @pytest.mark.testcase_id("TC-006")
-    def test_remove_from_wishlist(self, browser,custom_json_reporter):
-        """[TC-006] Test removing a product from the wishlist"""
+    @pytest.mark.testcase_id("TC_006")
+    def test_remove_from_wishlist_TC_006(self, browser,custom_json_reporter):
+        """[TC_006] Test removing a product from the wishlist"""
         try:
             # First add a product to wishlist
             self.test_wishlist_functionality(browser)
