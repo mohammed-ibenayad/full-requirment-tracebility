@@ -7,10 +7,10 @@ import sys
 import pytest
 
 # Add the project root directory to the Python path
-sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
+#sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 # Import our custom reporter
-from custom_json_reporter import *
+#from custom_json_reporter import *
 
 # If you need any other pytest configurations, add them below
 # For example, you might want to define additional fixtures or hooks
