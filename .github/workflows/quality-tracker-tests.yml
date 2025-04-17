@@ -38,13 +38,13 @@ jobs:
         id: run_tests
         run: |
           # Create a testcase filter expression based on the IDs passed from Quality Tracker
-          TEST_CASE_IDS=$(echo '${{ toJSON(github.event.client_payload.testCases) }}' | tr -d '[]"' | tr ',' '|')
+          TEST_CASE_IDS=$(echo '${{ toJSON(github.event.client_payload.testCases) }}' | tr -d '[]"' | tr ',' ' or ')
           echo "Running tests with filter: $TEST_CASE_IDS"
           
           # Run pytest with the testcase_id marker filter
           python -m pytest \
             -v \
-            -m "testcase_id('$TEST_CASE_IDS')" \
+            -m "testcase_id(\"$TEST_CASE_IDS\")" \
             --html=test-results/report.html \
             --junit-xml=test-results/junit.xml \
             --capture=sys
