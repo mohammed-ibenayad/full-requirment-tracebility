@@ -10,10 +10,10 @@
       "Verify that the content area is displayed."
     ],
     "expectedResult": "Homepage loads successfully with all key elements present and visible.",
-    "status": "Passed",
+    "status": "Not Run",
     "automationStatus": "Automated",
     "automationPath": "tests/TestOpenCart/test_homepage_loads.py",
-    "lastExecuted": "2025-04-13T11:41:35.919487",
+    "lastExecuted": "",
     "requirementIds": [
       "REQ-001"
     ],
@@ -38,10 +38,10 @@
       "Verify that search results contain the search term or product listings."
     ],
     "expectedResult": "Search results page loads and displays relevant products based on the search term.",
-    "status": "Passed",
+    "status": "Not Run",
     "automationStatus": "Automated",
     "automationPath": "tests/TestOpenCart/test_product_search.py",
-    "lastExecuted": "2025-04-13T11:41:35.919487",
+    "lastExecuted": "",
     "requirementIds": [
       "REQ-002"
     ],
@@ -67,10 +67,10 @@
       "Verify that the product is added to the cart through success message or cart icon update."
     ],
     "expectedResult": "Product is successfully added to the cart with confirmation message or cart icon update.",
-    "status": "Failed",
+    "status": "",
     "automationStatus": "Automated",
     "automationPath": "tests/TestOpenCart/test_add_to_cart.py",
-    "lastExecuted": "2025-04-13T11:41:35.920496",
+    "lastExecuted": "",
     "requirementIds": [
       "REQ-003"
     ],
@@ -97,10 +97,10 @@
       "Verify that login is successful and user is redirected to account area."
     ],
     "expectedResult": "User is successfully logged in and redirected to account area with account information visible.",
-    "status": "Passed",
+    "status": "Not Run",
     "automationStatus": "Automated",
     "automationPath": "tests/TestOpenCart/test_user_login.py",
-    "lastExecuted": "2025-04-13T11:41:35.920496",
+    "lastExecuted": "",
     "requirementIds": [
       "REQ-004"
     ],
@@ -125,10 +125,10 @@
       "Verify success message or navigate to wishlist page to confirm product was added."
     ],
     "expectedResult": "Product is successfully added to the wishlist with confirmation message or visible in wishlist page.",
-    "status": "Failed",
+    "status": "",
     "automationStatus": "Automated",
     "automationPath": "tests/TestOpenCart/test_wishlist_functionality.py",
-    "lastExecuted": "2025-04-13T11:41:35.920496",
+    "lastExecuted": "",
     "requirementIds": [
       "REQ-005"
     ],
@@ -154,10 +154,10 @@
       "Verify that the product is removed from the wishlist."
     ],
     "expectedResult": "Product is successfully removed from the wishlist with confirmation message or no longer visible in wishlist page.",
-    "status": "Failed",
+    "status": "",
     "automationStatus": "Automated",
     "automationPath": "tests/TestOpenCart/test_remove_from_wishlist.py",
-    "lastExecuted": "2025-04-13T11:41:35.920496",
+    "lastExecuted": "",
     "requirementIds": [
       "REQ-005"
     ],
@@ -182,10 +182,10 @@
       "Verify that login is successful and admin is redirected to dashboard."
     ],
     "expectedResult": "Admin is successfully logged in and redirected to dashboard with dashboard information visible.",
-    "status": "Passed",
+    "status": "Not Run",
     "automationStatus": "Automated",
     "automationPath": "tests/test_admin.py",
-    "lastExecuted": "2025-04-13T14:37:18.095546",
+    "lastExecuted": "",
     "requirementIds": [
       "REQ-006"
     ],
@@ -209,10 +209,10 @@
       "Verify that logout is successful and admin is redirected to login page."
     ],
     "expectedResult": "Admin is successfully logged out and redirected to login page.",
-    "status": "Passed",
+    "status": "Not Run",
     "automationStatus": "Automated",
     "automationPath": "tests/test_admin.py",
-    "lastExecuted": "2025-04-13T14:37:18.096542",
+    "lastExecuted": "",
     "requirementIds": [
       "REQ-006"
     ],
@@ -239,10 +239,10 @@
       "Verify success message for product deletion."
     ],
     "expectedResult": "Product is successfully deleted with confirmation message.",
-    "status": "Passed",
+    "status": "Not Run",
     "automationStatus": "Automated",
     "automationPath": "tests/test_admin.py",
-    "lastExecuted": "2025-04-13T14:37:18.095546",
+    "lastExecuted": "",
     "requirementIds": [
       "REQ-007"
     ],
@@ -270,10 +270,10 @@
       "Verify success message for category creation."
     ],
     "expectedResult": "Category is successfully created with confirmation message.",
-    "status": "Passed",
+    "status": "Not Run",
     "automationStatus": "Automated",
     "automationPath": "tests/test_admin.py",
-    "lastExecuted": "2025-04-13T14:37:18.097541",
+    "lastExecuted": "",
     "requirementIds": [
       "REQ-008"
     ],
