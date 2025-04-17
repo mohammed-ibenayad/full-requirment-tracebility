@@ -41,10 +41,11 @@ jobs:
           TEST_CASE_IDS=$(echo '${{ toJSON(github.event.client_payload.testCases) }}' | tr -d '[]"' | tr ',' ' or ')
           echo "Running tests with filter: $TEST_CASE_IDS"
           
-          # Run pytest with the testcase_id marker filter
+          # Run pytest with -k to select tests containing the test case IDs
+          # This will match test functions with TC-XXX in their name, docstring, or file path
           python -m pytest \
             -v \
-            -m "testcase_id(\"$TEST_CASE_IDS\")" \
+            -k "$TEST_CASE_IDS" \
             --html=test-results/report.html \
             --junit-xml=test-results/junit.xml \
             --capture=sys
@@ -73,14 +74,21 @@ jobs:
               
               # Extract test results
               for testcase in root.findall(".//testcase"):
-                  # Extract test case ID from the markers if available
+                  # Extract test case ID from the name or classname
                   full_name = testcase.get("name", "")
                   class_name = testcase.get("classname", "")
                   
-                  # Try to find the TC-XXX pattern in the test name
+                  # Try to find the TC-XXX pattern in the test name or class
                   import re
                   tc_match = re.search(r"TC-\d+", full_name) or re.search(r"TC-\d+", class_name)
                   tc_id = tc_match.group(0) if tc_match else None
+                  
+                  # If no direct TC-XXX match found, see if any of our test case IDs are in the name
+                  if tc_id is None:
+                      for test_id in test_case_ids:
+                          if test_id in full_name or test_id in class_name:
+                              tc_id = test_id
+                              break
                   
                   # Skip if not in our list of test case IDs
                   if tc_id not in test_case_ids:
@@ -108,8 +116,16 @@ jobs:
                   log_output = f"Running test {tc_id}: {full_name}\n"
                   if status == "Failed":
                       log_output += f"FAILURE: {message}\n"
+                      # Add failure text content if available
+                      if failure is not None and failure.text:
+                          log_output += failure.text.strip() + "\n"
+                      elif error is not None and error.text:
+                          log_output += error.text.strip() + "\n"
                   elif status == "Skipped":
-                      log_output += "SKIPPED\n"
+                      skip_reason = ""
+                      if skipped is not None:
+                          skip_reason = skipped.get("message", "")
+                      log_output += f"SKIPPED: {skip_reason}\n"
                   else:
                       log_output += "PASSED\n"
                   
