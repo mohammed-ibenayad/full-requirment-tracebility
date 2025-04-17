@@ -12,6 +12,7 @@ jobs:
       # Set environment variables for the test run
       REQUIREMENT_ID: ${{ github.event.client_payload.requirementId }}
       REQUIREMENT_NAME: ${{ github.event.client_payload.requirementName }}
+      TEST_CASE_IDS: ${{ join(github.event.client_payload.testCases, ' or ') }}
       
     steps:
       - name: Checkout repository
@@ -25,168 +26,16 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest pytest-html pytest-cov pytest-xdist pytest-selenium webdriver-manager
+          pip install pytest pytest-html
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
       
       - name: Display test cases to run
         run: |
           echo "Executing tests for requirement: $REQUIREMENT_ID - $REQUIREMENT_NAME"
-          echo "Test case IDs:"
-          echo '${{ toJSON(github.event.client_payload.testCases) }}'
+          echo "Test case IDs: $TEST_CASE_IDS"
       
       - name: Run tests
-        id: run_tests
         run: |
-          # Create a testcase filter expression based on the IDs passed from Quality Tracker
-          # TEST_CASE_IDS=$(echo '${{ toJSON(github.event.client_payload.testCases) }}' | tr -d '[]"' | tr ',' ' or ')
-          # echo "Running tests with filter: $TEST_CASE_IDS"
-          
           # Run pytest with -k to select tests containing the test case IDs
-          # This will match test functions with TC-XXX in their name, docstring, or file path
-          python -m pytest \
-            -v \
-            -k "$TEST_CASE_IDS" \
-            --html=test-results/report.html \
-            --junit-xml=test-results/junit.xml \
-            --capture=sys
-        continue-on-error: true
-      
-      - name: Generate test results JSON
-        run: |
-          mkdir -p test-results
-          python -c '
-          import json
-          import xml.etree.ElementTree as ET
-          from pathlib import Path
-          
-          # Parse JUnit XML result
-          try:
-              tree = ET.parse("test-results/junit.xml")
-              root = tree.getroot()
-              
-              # Get list of test cases IDs from client payload
-              import os
-              import json
-              test_case_ids = json.loads(os.environ.get("GITHUB_EVENT_PAYLOAD", "{}")).get("client_payload", {}).get("testCases", [])
-              
-              # Initialize results dictionary
-              results = []
-              
-              # Extract test results
-              for testcase in root.findall(".//testcase"):
-                  # Extract test case ID from the name or classname
-                  full_name = testcase.get("name", "")
-                  class_name = testcase.get("classname", "")
-                  
-                  # Try to find the TC-XXX pattern in the test name or class
-                  import re
-                  tc_match = re.search(r"TC-\d+", full_name) or re.search(r"TC-\d+", class_name)
-                  tc_id = tc_match.group(0) if tc_match else None
-                  
-                  # If no direct TC-XXX match found, see if any of our test case IDs are in the name
-                  if tc_id is None:
-                      for test_id in test_case_ids:
-                          if test_id in full_name or test_id in class_name:
-                              tc_id = test_id
-                              break
-                  
-                  # Skip if not in our list of test case IDs
-                  if tc_id not in test_case_ids:
-                      continue
-                  
-                  # Determine status
-                  failure = testcase.find("failure")
-                  error = testcase.find("error")
-                  skipped = testcase.find("skipped")
-                  
-                  status = "Passed"
-                  if failure is not None or error is not None:
-                      status = "Failed"
-                  elif skipped is not None:
-                      status = "Skipped"
-                  
-                  # Get failure message if any
-                  message = ""
-                  if failure is not None:
-                      message = failure.get("message", "")
-                  elif error is not None:
-                      message = error.get("message", "")
-                  
-                  # Build log output
-                  log_output = f"Running test {tc_id}: {full_name}\n"
-                  if status == "Failed":
-                      log_output += f"FAILURE: {message}\n"
-                      # Add failure text content if available
-                      if failure is not None and failure.text:
-                          log_output += failure.text.strip() + "\n"
-                      elif error is not None and error.text:
-                          log_output += error.text.strip() + "\n"
-                  elif status == "Skipped":
-                      skip_reason = ""
-                      if skipped is not None:
-                          skip_reason = skipped.get("message", "")
-                      log_output += f"SKIPPED: {skip_reason}\n"
-                  else:
-                      log_output += "PASSED\n"
-                  
-                  results.append({
-                      "id": tc_id,
-                      "name": full_name,
-                      "status": status,
-                      "duration": int(float(testcase.get("time", 0)) * 1000),  # Convert to ms
-                      "logs": log_output
-                  })
-              
-              # Add any missing test cases as "Not Run"
-              found_tc_ids = [r["id"] for r in results]
-              for tc_id in test_case_ids:
-                  if tc_id not in found_tc_ids:
-                      results.append({
-                          "id": tc_id,
-                          "name": f"Test case {tc_id}",
-                          "status": "Not Run",
-                          "duration": 0,
-                          "logs": f"Test {tc_id} was not executed or not found in the test suite."
-                      })
-              
-              # Write results to file
-              with open("test-results/test-results.json", "w") as f:
-                  json.dump(results, f, indent=2)
-                  
-              print(f"Generated test results for {len(results)} test cases")
-              
-          except Exception as e:
-              print(f"Error generating test results: {e}")
-              # Create empty results if parsing failed
-              default_results = []
-              for tc_id in json.loads(os.environ.get("GITHUB_EVENT_PAYLOAD", "{}")).get("client_payload", {}).get("testCases", []):
-                  default_results.append({
-                      "id": tc_id,
-                      "name": f"Test case {tc_id}",
-                      "status": "Error",
-                      "duration": 0,
-                      "logs": f"Error processing test results: {str(e)}"
-                  })
-              
-              with open("test-results/test-results.json", "w") as f:
-                  json.dump(default_results, f, indent=2)
-          '
-        shell: bash
-        env:
-          GITHUB_EVENT_PAYLOAD: ${{ toJSON(github.event) }}
-      
-      - name: Upload test result artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-results
-          path: test-results/
-      
-      - name: Send results back to Quality Tracker
-        run: |
-          echo "Sending results back to Quality Tracker..."
-          # In a real implementation, you would send results back to your Quality Tracker app
-          # This could be via a webhook, API call, or other integration
-          # For now, this is just a placeholder
-          
-          # Example of how you might POST results back (replace with your actual implementation):
-          # curl -X POST -H "Content-Type: application/json" -d @test-results/test-results.json https://your-quality-tracker-app.com/api/test-results/$REQUIREMENT_ID
+          python -m pytest -v -k "$TEST_CASE_IDS"
+        continue-on-error: true  # Continue workflow even if tests fail
