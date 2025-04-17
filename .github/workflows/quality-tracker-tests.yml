@@ -1,5 +1,6 @@
-name: Quality Tracker Tests
+name: Quality Tracker Test Execution
 
+# This workflow is triggered by repository_dispatch event from the Quality Tracker application
 on:
   repository_dispatch:
     types: [quality-tracker-test-run]
@@ -7,132 +8,169 @@ on:
 jobs:
   run-tests:
     runs-on: ubuntu-latest
+    env:
+      # Set environment variables for the test run
+      REQUIREMENT_ID: ${{ github.event.client_payload.requirementId }}
+      REQUIREMENT_NAME: ${{ github.event.client_payload.requirementName }}
+      
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v4
       
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-          
+      
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest pytest-json-report
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-          fi
-          
-      - name: Print test information
+          pip install pytest pytest-html pytest-cov pytest-xdist pytest-selenium webdriver-manager
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+      
+      - name: Display test cases to run
         run: |
-          echo "Running tests for requirement: ${{ github.event.client_payload.requirementId }}"
-          echo "Requirement name: ${{ github.event.client_payload.requirementName }}"
-          echo "Test cases: ${{ join(github.event.client_payload.testCases, ', ') }}"
-          
-      - name: Run tests by test case IDs
+          echo "Executing tests for requirement: $REQUIREMENT_ID - $REQUIREMENT_NAME"
+          echo "Test case IDs:"
+          echo '${{ toJSON(github.event.client_payload.testCases) }}'
+      
+      - name: Run tests
         id: run_tests
         run: |
-          # Create a file with pytest marker expressions for each test case ID
-          echo "import sys" > run_marked_tests.py
-          echo "import pytest" >> run_marked_tests.py
-          echo "if __name__ == '__main__':" >> run_marked_tests.py
-          echo "    test_case_ids = ${{ toJson(github.event.client_payload.testCases) }}" >> run_marked_tests.py
-          echo "    # Build marker expressions for each test case ID" >> run_marked_tests.py
-          echo "    marker_expr = ' or '.join([f'testcase_id(\"{tc_id}\")' for tc_id in test_case_ids])" >> run_marked_tests.py
-          echo "    # Run pytest with the marker expressions and additional arguments" >> run_marked_tests.py
-          echo "    sys.exit(pytest.main(['-v', '-m', marker_expr, '--json-report', '--json-report-file=test-results.json']))" >> run_marked_tests.py
+          # Create a testcase filter expression based on the IDs passed from Quality Tracker
+          TEST_CASE_IDS=$(echo '${{ toJSON(github.event.client_payload.testCases) }}' | tr -d '[]"' | tr ',' '|')
+          echo "Running tests with filter: $TEST_CASE_IDS"
           
-          # Run the tests with the appropriate markers
-          python run_marked_tests.py
-          
-      - name: Process test results
-        if: always()
+          # Run pytest with the testcase_id marker filter
+          python -m pytest \
+            -v \
+            -m "testcase_id('$TEST_CASE_IDS')" \
+            --html=test-results/report.html \
+            --junit-xml=test-results/junit.xml \
+            --capture=sys
+        continue-on-error: true
+      
+      - name: Generate test results JSON
         run: |
-          # Process the test results to make them easier to consume by Quality Tracker
-          if [ -f "test-results.json" ]; then
-            python -c '
-import json
-import re
-
-# Read the test results
-with open("test-results.json", "r") as f:
-    results = json.load(f)
-
-# Extract test case information from test markers
-formatted_results = []
-
-# Map to keep track of which test cases were found
-test_cases_found = {}
-for test_id in ${{ toJson(github.event.client_payload.testCases) }}:
-    test_cases_found[test_id] = False
-
-# Process each test result
-for test_path, test_data in results.get("tests", {}).items():
-    # Extract test case ID from test markers if present
-    test_markers = test_data.get("metadata", {}).get("markers", [])
-    test_case_id = None
-    
-    for marker in test_markers:
-        if marker.startswith("testcase_id"):
-            # Extract the test case ID from the marker (looking for format like "testcase_id('TC-007')")
-            match = re.search(r"testcase_id\([\"\'](TC-\d+)[\"\']\)", marker)
-            if match:
-                test_case_id = match.group(1)
-                break
-    
-    if test_case_id and test_case_id in test_cases_found:
-        test_cases_found[test_case_id] = True
-        formatted_results.append({
-            "id": test_case_id,
-            "name": test_path.split("::")[-1],
-            "status": "Passed" if test_data.get("outcome") == "passed" else "Failed",
-            "duration": test_data.get("duration", 0) * 1000,  # Convert to ms
-            "logs": test_data.get("call", {}).get("longrepr", "No logs available")
-        })
-
-# Add placeholders for test cases that were not found
-for test_id, found in test_cases_found.items():
-    if not found:
-        formatted_results.append({
-            "id": test_id,
-            "name": f"Test case {test_id}",
-            "status": "Not Run",
-            "duration": 0,
-            "logs": "Test not found in the repository or did not run"
-        })
-
-# Write the formatted results
-with open("formatted-results.json", "w") as f:
-    json.dump(formatted_results, f, indent=2)
-'
-          else
-            echo "Test results file not found"
-            # Create a basic result file for missing results
-            echo "[" > formatted-results.json
-            first=true
-            for test_id in ${{ toJson(github.event.client_payload.testCases) }}; do
-              if [ "$first" = true ]; then
-                first=false
-              else
-                echo "," >> formatted-results.json
-              fi
-              echo "{" >> formatted-results.json
-              echo "  \"id\": \"$test_id\"," >> formatted-results.json
-              echo "  \"name\": \"Test case $test_id\"," >> formatted-results.json
-              echo "  \"status\": \"Not Run\"," >> formatted-results.json
-              echo "  \"duration\": 0," >> formatted-results.json
-              echo "  \"logs\": \"Test results could not be generated\"" >> formatted-results.json
-              echo "}" >> formatted-results.json
-            done
-            echo "]" >> formatted-results.json
-          fi
+          mkdir -p test-results
+          python -c '
+          import json
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
           
-      - name: Upload test results
-        uses: actions/upload-artifact@v3
-        if: always()
+          # Parse JUnit XML result
+          try:
+              tree = ET.parse("test-results/junit.xml")
+              root = tree.getroot()
+              
+              # Get list of test cases IDs from client payload
+              import os
+              import json
+              test_case_ids = json.loads(os.environ.get("GITHUB_EVENT_PAYLOAD", "{}")).get("client_payload", {}).get("testCases", [])
+              
+              # Initialize results dictionary
+              results = []
+              
+              # Extract test results
+              for testcase in root.findall(".//testcase"):
+                  # Extract test case ID from the markers if available
+                  full_name = testcase.get("name", "")
+                  class_name = testcase.get("classname", "")
+                  
+                  # Try to find the TC-XXX pattern in the test name
+                  import re
+                  tc_match = re.search(r"TC-\d+", full_name) or re.search(r"TC-\d+", class_name)
+                  tc_id = tc_match.group(0) if tc_match else None
+                  
+                  # Skip if not in our list of test case IDs
+                  if tc_id not in test_case_ids:
+                      continue
+                  
+                  # Determine status
+                  failure = testcase.find("failure")
+                  error = testcase.find("error")
+                  skipped = testcase.find("skipped")
+                  
+                  status = "Passed"
+                  if failure is not None or error is not None:
+                      status = "Failed"
+                  elif skipped is not None:
+                      status = "Skipped"
+                  
+                  # Get failure message if any
+                  message = ""
+                  if failure is not None:
+                      message = failure.get("message", "")
+                  elif error is not None:
+                      message = error.get("message", "")
+                  
+                  # Build log output
+                  log_output = f"Running test {tc_id}: {full_name}\n"
+                  if status == "Failed":
+                      log_output += f"FAILURE: {message}\n"
+                  elif status == "Skipped":
+                      log_output += "SKIPPED\n"
+                  else:
+                      log_output += "PASSED\n"
+                  
+                  results.append({
+                      "id": tc_id,
+                      "name": full_name,
+                      "status": status,
+                      "duration": int(float(testcase.get("time", 0)) * 1000),  # Convert to ms
+                      "logs": log_output
+                  })
+              
+              # Add any missing test cases as "Not Run"
+              found_tc_ids = [r["id"] for r in results]
+              for tc_id in test_case_ids:
+                  if tc_id not in found_tc_ids:
+                      results.append({
+                          "id": tc_id,
+                          "name": f"Test case {tc_id}",
+                          "status": "Not Run",
+                          "duration": 0,
+                          "logs": f"Test {tc_id} was not executed or not found in the test suite."
+                      })
+              
+              # Write results to file
+              with open("test-results/test-results.json", "w") as f:
+                  json.dump(results, f, indent=2)
+                  
+              print(f"Generated test results for {len(results)} test cases")
+              
+          except Exception as e:
+              print(f"Error generating test results: {e}")
+              # Create empty results if parsing failed
+              default_results = []
+              for tc_id in json.loads(os.environ.get("GITHUB_EVENT_PAYLOAD", "{}")).get("client_payload", {}).get("testCases", []):
+                  default_results.append({
+                      "id": tc_id,
+                      "name": f"Test case {tc_id}",
+                      "status": "Error",
+                      "duration": 0,
+                      "logs": f"Error processing test results: {str(e)}"
+                  })
+              
+              with open("test-results/test-results.json", "w") as f:
+                  json.dump(default_results, f, indent=2)
+          '
+        shell: bash
+        env:
+          GITHUB_EVENT_PAYLOAD: ${{ toJSON(github.event) }}
+      
+      - name: Upload test result artifacts
+        uses: actions/upload-artifact@v4
         with:
           name: test-results
-          path: |
-            test-results.json
-            formatted-results.json
+          path: test-results/
+      
+      - name: Send results back to Quality Tracker
+        run: |
+          echo "Sending results back to Quality Tracker..."
+          # In a real implementation, you would send results back to your Quality Tracker app
+          # This could be via a webhook, API call, or other integration
+          # For now, this is just a placeholder
+          
+          # Example of how you might POST results back (replace with your actual implementation):
+          # curl -X POST -H "Content-Type: application/json" -d @test-results/test-results.json https://your-quality-tracker-app.com/api/test-results/$REQUIREMENT_ID
