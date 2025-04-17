@@ -38,8 +38,8 @@ jobs:
         id: run_tests
         run: |
           # Create a testcase filter expression based on the IDs passed from Quality Tracker
-          # TEST_CASE_IDS=$(echo '${{ toJSON(github.event.client_payload.testCases) }}' | tr -d '[]"' | tr ',' ' or ')
-          # echo "Running tests with filter: $TEST_CASE_IDS"
+          TEST_CASE_IDS=$(echo '${{ toJSON(github.event.client_payload.testCases) }}' | tr -d '[]"' | tr ',' ' or ')
+          echo "Running tests with filter: $TEST_CASE_IDS"
           
           # Run pytest with -k to select tests containing the test case IDs
           # This will match test functions with TC-XXX in their name, docstring, or file path
