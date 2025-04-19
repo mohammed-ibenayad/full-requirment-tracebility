@@ -20,7 +20,7 @@ class TestOpenCart:
         driver = webdriver.Chrome(options=options)  # You can change to Firefox, Edge, etc.
         driver.maximize_window()
         
-        driver.get("https://www.opencart.com/index.php?route=account/login")  # Change URL if your OpenCart is hosted elsewhere
+        driver.get("https://demo.opencart.com.gr/")  # Change URL if your OpenCart is hosted elsewhere
         yield driver
         # Teardown - close the browser
         driver.quit()
