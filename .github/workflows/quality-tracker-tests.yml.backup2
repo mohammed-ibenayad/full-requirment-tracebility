@@ -1,0 +1,189 @@
+# .github/workflows/quality-tracker-tests.yml
+name: Quality Tracker Test Execution
+
+on:
+  repository_dispatch:
+    types: [quality-tracker-test-run]
+
+jobs:
+  run-tests:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pytest selenium requests
+        
+    - name: Extract payload information
+      id: extract_payload
+      run: |
+        echo "REQUIREMENT_ID=${{ github.event.client_payload.requirementId }}" >> $GITHUB_ENV
+        echo "REQUIREMENT_NAME=${{ github.event.client_payload.requirementName }}" >> $GITHUB_ENV
+        echo "TEST_CASES=${{ github.event.client_payload.testCases }}" >> $GITHUB_ENV
+        echo "CALLBACK_URL=${{ github.event.client_payload.callbackUrl }}" >> $GITHUB_ENV
+        echo "REQUEST_ID=${{ github.event.client_payload.requestId }}" >> $GITHUB_ENV
+        
+    - name: Debug payload
+      run: |
+        echo "Requirement ID: $REQUIREMENT_ID"
+        echo "Requirement Name: $REQUIREMENT_NAME" 
+        echo "Test Cases: $TEST_CASES"
+        echo "Callback URL: $CALLBACK_URL"
+        echo "Request ID: $REQUEST_ID"
+        echo "Run ID: ${{ github.run_id }}"
+        
+    - name: Run Quality Tracker Tests
+      id: run_tests
+      run: |
+        # Create a results directory
+        mkdir -p test-results
+        
+        # Initialize results file with metadata
+        cat > test-results/results-${{ github.run_id }}.json << 'EOF'
+        {
+          "requirementId": "${{ env.REQUIREMENT_ID }}",
+          "requirementName": "${{ env.REQUIREMENT_NAME }}",
+          "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "runId": "${{ github.run_id }}",
+          "requestId": "${{ env.REQUEST_ID }}",
+          "gitHubActionsUrl": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          "results": [
+        EOF
+        
+        # Parse test cases (remove brackets and quotes, split by comma)
+        TEST_CASES_CLEAN=$(echo '${{ env.TEST_CASES }}' | sed 's/\[//g' | sed 's/\]//g' | sed 's/"//g')
+        IFS=',' read -ra TESTS <<< "$TEST_CASES_CLEAN"
+        
+        # Run each test case
+        RESULTS=()
+        for test_id in "${TESTS[@]}"; do
+          test_id=$(echo "$test_id" | xargs)  # trim whitespace
+          echo "🧪 Running test: $test_id"
+          
+          # Simulate test execution (replace with your actual test logic)
+          start_time=$(date +%s%3N)
+          
+          # Example test logic - replace with your actual test execution
+          if [[ "$test_id" == *"001"* ]] || [[ "$test_id" == *"002"* ]]; then
+            # Simulate a test that usually passes
+            if [ $((RANDOM % 10)) -lt 8 ]; then
+              status="Passed"
+              logs="Test $test_id executed successfully\nAll assertions passed\nTest completed without errors"
+            else
+              status="Failed"
+              logs="Test $test_id failed\nAssertion error: Expected value did not match actual\nTest failed with exit code 1"
+            fi
+          else
+            # Other tests - mixed results
+            case $((RANDOM % 4)) in
+              0|1) status="Passed"; logs="Test $test_id executed successfully\nAll checks passed" ;;
+              2) status="Failed"; logs="Test $test_id failed\nError occurred during execution\nCheck test logs for details" ;;
+              3) status="Not Run"; logs="Test $test_id was skipped\nPrerequisites not met\nTest marked as not run" ;;
+            esac
+          fi
+          
+          end_time=$(date +%s%3N)
+          duration=$((end_time - start_time + RANDOM % 1000 + 100))
+          
+          # Build JSON result
+          result=$(cat << EOF
+        {
+          "id": "$test_id",
+          "name": "Test case $test_id",
+          "status": "$status",
+          "duration": $duration,
+          "logs": "$logs",
+          "executedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "environment": "GitHub Actions"
+        }
+        EOF
+        )
+          
+          RESULTS+=("$result")
+          echo "✅ Test $test_id completed with status: $status"
+        done
+        
+        # Complete the JSON file
+        # Join results with commas
+        printf '%s' "${RESULTS[@]}" | sed 's/}{/},{/g' >> test-results/results-${{ github.run_id }}.json
+        echo '  ],' >> test-results/results-${{ github.run_id }}.json
+        echo '  "summary": {' >> test-results/results-${{ github.run_id }}.json
+        echo '    "totalTests": '${#RESULTS[@]}',' >> test-results/results-${{ github.run_id }}.json
+        echo '    "executionTime": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"' >> test-results/results-${{ github.run_id }}.json
+        echo '  }' >> test-results/results-${{ github.run_id }}.json
+        echo '}' >> test-results/results-${{ github.run_id }}.json
+        
+        echo "📋 Test execution completed"
+        
+    - name: Upload test results as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-results-${{ github.run_id }}
+        path: test-results/results-${{ github.run_id }}.json
+        retention-days: 30
+        
+    - name: Send results to webhook (Production Server)
+      if: always()
+      run: |
+        echo "📡 Sending results to webhook: $CALLBACK_URL"
+        
+        # Read the results file
+        RESULTS_FILE="test-results/results-${{ github.run_id }}.json"
+        
+        if [ -f "$RESULTS_FILE" ]; then
+          echo "📤 Sending results to: $CALLBACK_URL"
+          
+          # Send to webhook with retry logic
+          for attempt in 1 2 3; do
+            echo "🔄 Attempt $attempt to send webhook..."
+            
+            if curl -X POST "$CALLBACK_URL" \
+              -H "Content-Type: application/json" \
+              -H "User-Agent: GitHub-Actions-Quality-Tracker/1.0" \
+              -H "X-GitHub-Run-ID: ${{ github.run_id }}" \
+              -H "X-GitHub-Repository: ${{ github.repository }}" \
+              --data @"$RESULTS_FILE" \
+              --max-time 30 \
+              --retry 2 \
+              --retry-delay 5 \
+              -w "HTTP Status: %{http_code}\nResponse Time: %{time_total}s\n" \
+              -s -S; then
+              
+              echo "✅ Webhook sent successfully on attempt $attempt"
+              break
+            else
+              echo "❌ Webhook failed on attempt $attempt"
+              if [ $attempt -eq 3 ]; then
+                echo "🚨 All webhook attempts failed"
+                exit 1
+              fi
+              sleep $((attempt * 2))
+            fi
+          done
+        else
+          echo "❌ Results file not found: $RESULTS_FILE"
+          exit 1
+        fi
+        
+    - name: Summary
+      if: always()
+      run: |
+        echo "🎯 Test execution summary:"
+        echo "- Requirement: $REQUIREMENT_ID ($REQUIREMENT_NAME)"
+        echo "- GitHub Run: ${{ github.run_id }}"
+        echo "- Results sent to: $CALLBACK_URL"
+        echo "- Artifacts: test-results-${{ github.run_id }}"
+        
+        if [ -f "test-results/results-${{ github.run_id }}.json" ]; then
+          echo "📊 Results preview:"
+          cat test-results/results-${{ github.run_id }}.json | head -20
+        fi
