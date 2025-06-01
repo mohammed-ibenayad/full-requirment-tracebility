@@ -56,150 +56,6 @@
     "estimatedDuration": 1
   },
   {
-    "id": "TC_003",
-    "name": "Verify login from My Account dropdown",
-    "description": "Verify that a user can access the login page from My Account dropdown in the header.",
-    "steps": [
-      "Navigate to the OpenCart homepage.",
-      "Click on the My Account dropdown in the header.",
-      "Click on Login option in the dropdown.",
-      "Verify that login page is displayed with E-Mail Address and Password fields."
-    ],
-    "expectedResult": "User should be redirected to the login page with returning customer form visible.",
-    "status": "Not Run",
-    "automationStatus": "Automated",
-    "automationPath": "tests/TestOpenCart/test_login_navigation.py",
-    "lastExecuted": "",
-    "requirementIds": [
-      "REQ-001"
-    ],
-    "version": "v1.0",
-    "executedBy": "Pytest",
-    "tags": [
-      "Authentication",
-      "Navigation",
-      "Login"
-    ],
-    "priority": "Medium",
-    "estimatedDuration": 1
-  },
-  {
-    "id": "TC_004",
-    "name": "Verify 'Forgotten Password' functionality",
-    "description": "Verify that a user can access and use the 'Forgotten Password' functionality.",
-    "steps": [
-      "Navigate to the OpenCart login page.",
-      "Click on the 'Forgotten Password' link below the password field.",
-      "Enter registered email address in the E-Mail Address field.",
-      "Click on the Continue button."
-    ],
-    "expectedResult": "Password reset email should be sent to the registered email address and a confirmation message should be displayed.",
-    "status": "Not Run",
-    "automationStatus": "Automated",
-    "automationPath": "tests/TestOpenCart/test_forgotten_password.py",
-    "lastExecuted": "",
-    "requirementIds": [
-      "REQ-001"
-    ],
-    "version": "v1.0",
-    "executedBy": "Pytest",
-    "tags": [
-      "Authentication",
-      "Password Reset",
-      "Account"
-    ],
-    "priority": "Medium",
-    "estimatedDuration": 1
-  },
-  {
-    "id": "TC_005",
-    "name": "Verify new customer registration flow",
-    "description": "Verify that a new customer can successfully register by completing the registration form.",
-    "steps": [
-      "Navigate to the OpenCart login page.",
-      "Click on Continue button in the New Customer section.",
-      "Enter First Name, Last Name, E-Mail, and Password in the registration form.",
-      "Toggle the Newsletter subscription switch (optional).",
-      "Check the 'I have read and agree to the Privacy Policy' checkbox.",
-      "Click on the Continue button."
-    ],
-    "expectedResult": "User account should be created successfully and user should be redirected to account creation success page.",
-    "status": "Not Run",
-    "automationStatus": "Automated",
-    "automationPath": "tests/TestOpenCart/test_user_registration.py",
-    "lastExecuted": "",
-    "requirementIds": [
-      "REQ-001"
-    ],
-    "version": "v1.0",
-    "executedBy": "Pytest",
-    "tags": [
-      "Authentication",
-      "Registration",
-      "Account"
-    ],
-    "priority": "High",
-    "estimatedDuration": 2
-  },
-  {
-    "id": "TC_006",
-    "name": "Verify registration with existing email",
-    "description": "Verify that system prevents registration with an already existing email address.",
-    "steps": [
-      "Navigate to the OpenCart registration page.",
-      "Enter an email address that is already registered in the E-Mail field.",
-      "Complete all other required fields (First Name, Last Name, Password).",
-      "Check the Privacy Policy agreement checkbox.",
-      "Click on the Continue button."
-    ],
-    "expectedResult": "Registration should be blocked and appropriate error message about duplicate email should be displayed.",
-    "status": "Not Run",
-    "automationStatus": "Automated",
-    "automationPath": "tests/TestOpenCart/test_user_registration_duplicate_email.py",
-    "lastExecuted": "",
-    "requirementIds": [
-      "REQ-001"
-    ],
-    "version": "v1.0",
-    "executedBy": "Pytest",
-    "tags": [
-      "Authentication",
-      "Registration",
-      "Negative Testing"
-    ],
-    "priority": "Medium",
-    "estimatedDuration": 1
-  },
-  {
-    "id": "TC_007",
-    "name": "Verify registration without agreeing to Privacy Policy",
-    "description": "Verify that system prevents registration when Privacy Policy checkbox is not checked.",
-    "steps": [
-      "Navigate to the OpenCart registration page.",
-      "Enter valid data for all required fields (First Name, Last Name, E-Mail, Password).",
-      "Do NOT check the 'I have read and agree to the Privacy Policy' checkbox.",
-      "Click on the Continue button."
-    ],
-    "expectedResult": "Registration should not proceed and an appropriate error message about Privacy Policy agreement should be displayed.",
-    "status": "Not Run",
-    "automationStatus": "Automated",
-    "automationPath": "tests/TestOpenCart/test_privacy_policy_validation.py",
-    "lastExecuted": "",
-    "requirementIds": [
-      "REQ-001"
-    ],
-    "version": "v1.0",
-    "executedBy": "Pytest",
-    "tags": [
-      "Authentication",
-      "Registration",
-      "Privacy Policy",
-      "Negative Testing"
-    ],
-    "priority": "Medium",
-    "estimatedDuration": 1
-  },
-  {
     "id": "TC_008",
     "name": "Verify registration with missing required fields",
     "description": "Verify that system validates required fields during registration.",
@@ -1825,7 +1681,7 @@
     "automationPath": "tests/TestOpenCart/test_mobile_responsiveness.py",
     "lastExecuted": "",
     "requirementIds": [
-      "REQ-014"
+      "REQ-005"
     ],
     "version": "v1.0",
     "executedBy": "Pytest",
@@ -1855,7 +1711,6 @@
     "automationPath": "tests/TestOpenCart/test_responsive_checkout.py",
     "lastExecuted": "",
     "requirementIds": [
-      "REQ-014",
       "REQ-005"
     ],
     "version": "v1.0",
