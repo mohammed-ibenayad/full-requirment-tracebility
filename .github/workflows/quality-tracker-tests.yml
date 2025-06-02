@@ -27,210 +27,269 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest pytest-html
-          pip install selenium
+          pip install pytest pytest-html pytest-json-report
+          pip install selenium webdriver-manager
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
       
-      - name: Display test cases to run
+      - name: Display test execution info
         run: |
-          echo "Executing tests for requirement: $REQUIREMENT_ID - $REQUIREMENT_NAME"
-          echo "Test case IDs: $TEST_CASE_IDS"
-          echo "GitHub Run ID: $GITHUB_RUN_ID"
-          echo "Request ID: $REQUEST_ID"
+          echo "🎯 Executing tests for requirement: $REQUIREMENT_ID - $REQUIREMENT_NAME"
+          echo "📋 Test case IDs: $TEST_CASE_IDS"
+          echo "🔗 GitHub Run ID: $GITHUB_RUN_ID"
+          echo "📝 Request ID: $REQUEST_ID"
+          echo "📡 Callback URL: $CALLBACK_URL"
       
-      - name: Run tests
+      - name: Run tests with enhanced reporting
         id: run_tests
         run: |
-          # Run pytest with -k to select tests containing the test case IDs
-          python -m pytest -v -k "$TEST_CASE_IDS" --junit-xml=test-results.xml
-        continue-on-error: true  # Continue workflow even if tests fail
+          # Create test results directory
+          mkdir -p test-results
+          
+          # Run pytest with multiple output formats for better parsing
+          python -m pytest -v \
+            -k "$TEST_CASE_IDS" \
+            --junit-xml=test-results/junit.xml \
+            --json-report --json-report-file=test-results/pytest-report.json \
+            --tb=short \
+            || true  # Continue even if tests fail
+        continue-on-error: true
       
-      - name: Generate test results JSON
+      - name: Generate Quality Tracker results
         run: |
-          cat > process_tests.py << 'EOF'
+          cat > process_results.py << 'EOF'
           import json
           import xml.etree.ElementTree as ET
           import os
           import time
-          import sys
+          import re
+          from pathlib import Path
           
-          # Capture debug info first
-          debug_info = {
-              "github_run_id": os.environ.get("GITHUB_RUN_ID", ""),
-              "request_id": os.environ.get("REQUEST_ID", ""),
-              "requirement_id": os.environ.get("REQUIREMENT_ID", ""),
-              "requested_tests": os.environ.get("TEST_CASE_IDS", "").replace(" or ", ",").split(","),
-              "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-          }
+          def normalize_test_id(test_id):
+              """Normalize test ID for matching (TC-001 -> TC_001)"""
+              return re.sub(r'[-_]', '_', test_id.upper()) if test_id else ""
           
-          print(f"Debug Info: {json.dumps(debug_info, indent=2)}")
+          def extract_test_id_from_name(name, requested_ids):
+              """Extract test ID from test method/class name"""
+              normalized_name = normalize_test_id(name)
+              
+              for req_id in requested_ids:
+                  normalized_req = normalize_test_id(req_id)
+                  if normalized_req and normalized_req in normalized_name:
+                      return req_id  # Return original format
+              return None
           
-          # Parse JUnit XML result
+          # Get environment variables
+          requirement_id = os.environ.get("REQUIREMENT_ID", "")
+          request_id = os.environ.get("REQUEST_ID", "")
+          run_id = os.environ.get("GITHUB_RUN_ID", "")
+          
+          # Parse requested test IDs
+          raw_test_ids = os.environ.get("TEST_CASE_IDS", "").replace(" or ", ",")
+          requested_test_ids = [tid.strip() for tid in raw_test_ids.split(",") if tid.strip()]
+          
+          print(f"🔍 Processing test results for {len(requested_test_ids)} requested tests")
+          print(f"📋 Requested IDs: {requested_test_ids}")
+          
           test_results = []
-          try:
-              tree = ET.parse("test-results.xml")
-              root = tree.getroot()
-              
-              # Get test case IDs from environment variable - clean them up properly
-              raw_test_ids = os.environ.get("TEST_CASE_IDS", "").replace(" or ", ",").split(",")
-              test_ids = [tid.strip() for tid in raw_test_ids if tid.strip()]
-              
-              print(f"Processing test IDs: {test_ids}")
-              
-              # Extract test results
-              for testcase in root.findall(".//testcase"):
-                  name = testcase.get("name", "")
-                  classname = testcase.get("classname", "")
-                  
-                  # Improved test ID matching - be more flexible
-                  test_id = None
-                  for tid in test_ids:
-                      # Normalize both for comparison (remove TC- vs TC_)
-                      normalized_tid = tid.replace("-", "_").upper()
-                      normalized_name = name.replace("-", "_").upper()
-                      normalized_class = classname.replace("-", "_").upper()
-                      
-                      if (normalized_tid in normalized_name or 
-                          normalized_tid in normalized_class or
-                          normalized_name.endswith(normalized_tid) or
-                          normalized_class.endswith(normalized_tid)):
-                          test_id = tid  # Use the original ID format from the request
-                          break
-                  
-                  if not test_id:
-                      print(f"Could not match test case {name} (class: {classname}) to any requested test ID")
-                      continue
-                  
-                  # Determine status
-                  status = "Passed"
-                  error_msg = ""
-                  
-                  failure = testcase.find("failure")
-                  error = testcase.find("error")
-                  skipped = testcase.find("skipped")
-                  
-                  if failure is not None:
-                      status = "Failed"
-                      error_msg = failure.get("message", failure.text or "Test failed")[:200]  # Limit message length
-                  elif error is not None:
-                      status = "Failed"
-                      error_msg = error.get("message", error.text or "Test error")[:200]
-                  elif skipped is not None:
-                      status = "Not Run"
-                      error_msg = skipped.get("message", skipped.text or "Test skipped")[:200]
-                  
-                  # Calculate duration in milliseconds
-                  duration_ms = int(float(testcase.get("time", "0")) * 1000)
-                  
-                  result = {
-                      "id": test_id,
-                      "name": name,
-                      "status": status,
-                      "duration": duration_ms
-                  }
-                  
-                  # Add error message if there was a failure
-                  if error_msg:
-                      result["logs"] = error_msg
-                  
-                  test_results.append(result)
-                  print(f"Added result for {test_id}: {status} (duration: {duration_ms}ms)")
-              
-              # IMPORTANT: Add the originally requested tests as Not Run if they weren't found
-              found_ids = [r["id"] for r in test_results]
-              for tid in test_ids:
-                  if tid and tid not in found_ids:
-                      print(f"Adding Not Run status for missing test {tid}")
-                      test_results.append({
-                          "id": tid,
-                          "name": f"Test {tid}",
-                          "status": "Not Run",
-                          "duration": 0,
-                          "logs": f"Test {tid} was not found or not executed"
-                      })
-                      
-          except FileNotFoundError:
-              print("No test-results.xml file found - creating placeholder results")
-              # Get test case IDs from environment variable
-              raw_test_ids = os.environ.get("TEST_CASE_IDS", "").replace(" or ", ",").split(",")
-              test_ids = [tid.strip() for tid in raw_test_ids if tid.strip()]
-              
-              for tid in test_ids:
-                  if tid:
-                      test_results.append({
-                          "id": tid,
-                          "name": f"Test {tid}",
-                          "status": "Not Run",
-                          "duration": 0,
-                          "logs": "No test results file generated - tests may not have run"
-                      })
-          except Exception as e:
-              print(f"Error processing test results: {e}")
-              # Get test case IDs from environment variable
-              raw_test_ids = os.environ.get("TEST_CASE_IDS", "").replace(" or ", ",").split(",")
-              test_ids = [tid.strip() for tid in raw_test_ids if tid.strip()]
-              
-              for tid in test_ids:
-                  if tid:
-                      test_results.append({
-                          "id": tid,
-                          "name": f"Test {tid}",
-                          "status": "Failed",
-                          "duration": 0,
-                          "logs": f"Error processing test results: {str(e)}"
-                      })
+          processed_ids = set()
           
-          # Prepare result object with proper structure
-          result_obj = {
-              "requirementId": os.environ.get("REQUIREMENT_ID"),
+          # Try to parse JUnit XML first (most reliable)
+          junit_path = Path("test-results/junit.xml")
+          if junit_path.exists():
+              print("📄 Processing JUnit XML results...")
+              try:
+                  tree = ET.parse(junit_path)
+                  root = tree.getroot()
+                  
+                  for testcase in root.findall(".//testcase"):
+                      name = testcase.get("name", "")
+                      classname = testcase.get("classname", "")
+                      time_str = testcase.get("time", "0")
+                      
+                      # Try to match test ID
+                      test_id = extract_test_id_from_name(name, requested_test_ids)
+                      if not test_id:
+                          test_id = extract_test_id_from_name(classname, requested_test_ids)
+                      
+                      if not test_id:
+                          print(f"⚠️ Could not match test '{name}' to requested IDs")
+                          continue
+                      
+                      # Avoid duplicates
+                      if test_id in processed_ids:
+                          continue
+                      processed_ids.add(test_id)
+                      
+                      # Determine status and error message
+                      status = "Passed"
+                      logs = f"✅ Test {test_id} executed successfully"
+                      
+                      failure = testcase.find("failure")
+                      error = testcase.find("error")
+                      skipped = testcase.find("skipped")
+                      
+                      if failure is not None:
+                          status = "Failed"
+                          logs = f"❌ FAILURE: {failure.get('message', failure.text or 'Test failed')[:300]}"
+                      elif error is not None:
+                          status = "Failed"
+                          logs = f"💥 ERROR: {error.get('message', error.text or 'Test error')[:300]}"
+                      elif skipped is not None:
+                          status = "Not Run"
+                          logs = f"⏭️ SKIPPED: {skipped.get('message', skipped.text or 'Test skipped')[:300]}"
+                      
+                      # Calculate duration
+                      try:
+                          duration_ms = int(float(time_str) * 1000)
+                      except (ValueError, TypeError):
+                          duration_ms = 0
+                      
+                      result = {
+                          "id": test_id,
+                          "name": name or f"Test {test_id}",
+                          "status": status,
+                          "duration": duration_ms,
+                          "logs": logs
+                      }
+                      
+                      test_results.append(result)
+                      print(f"✅ Processed {test_id}: {status} ({duration_ms}ms)")
+                      
+              except Exception as e:
+                  print(f"❌ Error parsing JUnit XML: {e}")
+          
+          else:
+              print("⚠️ No JUnit XML found")
+          
+          # Add "Not Run" status for any missing tests
+          for test_id in requested_test_ids:
+              if test_id not in processed_ids:
+                  print(f"📝 Adding 'Not Run' status for missing test: {test_id}")
+                  test_results.append({
+                      "id": test_id,
+                      "name": f"Test {test_id}",
+                      "status": "Not Run",
+                      "duration": 0,
+                      "logs": f"⚠️ Test {test_id} was not found or executed"
+                  })
+          
+          # Create final result structure
+          result_payload = {
+              "requirementId": requirement_id,
+              "requestId": request_id,
               "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-              "requestId": os.environ.get("REQUEST_ID"),
-              "runId": os.environ.get("GITHUB_RUN_ID"),
+              "runId": run_id,
               "results": test_results,
-              "debug": debug_info
+              "metadata": {
+                  "totalRequested": len(requested_test_ids),
+                  "totalProcessed": len(test_results),
+                  "source": "github-actions",
+                  "workflow": "quality-tracker-tests"
+              }
           }
           
-          # Save to file - use run ID in filename
-          run_id = os.environ.get("GITHUB_RUN_ID", "unknown")
-          filename = f"results-{run_id}.json"
-          with open(filename, "w") as f:
-              json.dump(result_obj, f, indent=2)
+          # Save results with run-specific filename
+          run_filename = f"results-{run_id}.json"
+          with open(run_filename, "w") as f:
+              json.dump(result_payload, f, indent=2)
           
-          # Also save as results.json for backward compatibility
+          # Also save as generic filename for backward compatibility
           with open("results.json", "w") as f:
-              json.dump(result_obj, f, indent=2)
-              
-          print(f"Generated test results for {len(test_results)} test cases in {filename}")
-          print("Final results structure:")
-          print(json.dumps(result_obj, indent=2))
+              json.dump(result_payload, f, indent=2)
+          
+          print(f"📊 Generated results for {len(test_results)} tests")
+          print(f"💾 Saved to: {run_filename} and results.json")
+          
+          # Print summary
+          status_counts = {}
+          for result in test_results:
+              status = result["status"]
+              status_counts[status] = status_counts.get(status, 0) + 1
+          
+          print("📈 Test Results Summary:")
+          for status, count in status_counts.items():
+              emoji = "✅" if status == "Passed" else "❌" if status == "Failed" else "⏭️"
+              print(f"  {emoji} {status}: {count}")
+          
           EOF
           
-          # Run the Python script
-          python process_tests.py
+          # Run the result processor
+          python process_results.py
       
-      - name: Upload test results
+      - name: Upload test artifacts
         uses: actions/upload-artifact@v4
         with:
           name: test-results-${{ github.run_id }}
           path: |
             results-${{ github.run_id }}.json
             results.json
+            test-results/
+          retention-days: 7
           
-      - name: Send results back to Quality Tracker
+      - name: Send webhook to Quality Tracker
         if: env.CALLBACK_URL != ''
         run: |
-          echo "Sending test results back to Quality Tracker..."
-          echo "Callback URL: $CALLBACK_URL"
-          echo "Results file content:"
-          cat results.json
+          echo "📡 Sending results to Quality Tracker..."
+          echo "🎯 Callback URL: $CALLBACK_URL"
+          echo "📋 Request ID: $REQUEST_ID"
           echo ""
-          echo "Sending POST request..."
-          curl -X POST \
+          echo "📄 Results payload:"
+          cat results.json | jq '.' || cat results.json
+          echo ""
+          echo "🚀 Sending webhook..."
+          
+          # Send with better error handling and debugging
+          HTTP_CODE=$(curl -w "%{http_code}" -o response.txt \
+            -X POST \
             -H "Content-Type: application/json" \
-            -H "User-Agent: GitHub-Actions-Quality-Tracker" \
+            -H "User-Agent: GitHub-Actions-Quality-Tracker-v2" \
+            -H "X-GitHub-Run-ID: $GITHUB_RUN_ID" \
+            -H "X-Request-ID: $REQUEST_ID" \
             -d @results.json \
             "$CALLBACK_URL" \
-            --max-time 30 \
+            --max-time 45 \
             --retry 3 \
-            --retry-delay 5 \
-            -v
+            --retry-delay 10 \
+            --connect-timeout 15 \
+            -s)
+          
+          echo "📊 HTTP Response Code: $HTTP_CODE"
+          echo "📄 Response Body:"
+          cat response.txt
+          
+          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+            echo "✅ Webhook sent successfully!"
+          else
+            echo "❌ Webhook failed with HTTP $HTTP_CODE"
+            echo "⚠️ This won't fail the workflow, but results may not reach Quality Tracker"
+          fi
+      
+      - name: Workflow Summary
+        run: |
+          echo "## 🎯 Quality Tracker Test Execution Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Requirement:** $REQUIREMENT_ID - $REQUIREMENT_NAME" >> $GITHUB_STEP_SUMMARY
+          echo "**Request ID:** $REQUEST_ID" >> $GITHUB_STEP_SUMMARY
+          echo "**Requested Tests:** $TEST_CASE_IDS" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f results.json ]; then
+            echo "**Test Results:**" >> $GITHUB_STEP_SUMMARY
+            python3 -c "
+          import json
+          with open('results.json') as f:
+              data = json.load(f)
+          
+          results = data.get('results', [])
+          status_counts = {}
+          for r in results:
+              status = r['status']
+              status_counts[status] = status_counts.get(status, 0) + 1
+          
+          for status, count in status_counts.items():
+              emoji = '✅' if status == 'Passed' else '❌' if status == 'Failed' else '⏭️'
+              print(f'- {emoji} **{status}:** {count}')
+          " >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ No results file generated" >> $GITHUB_STEP_SUMMARY
+          fi
