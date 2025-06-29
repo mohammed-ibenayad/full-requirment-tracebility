@@ -10,7 +10,7 @@ jobs:
     env:
       REQUIREMENT_ID: ${{ github.event.client_payload.requirementId }}
       REQUIREMENT_NAME: ${{ github.event.client_payload.requirementName }}
-      TEST_CASE_IDS: ${{ join(github.event.client_payload.testCases, ' or ') }}
+      TEST_CASE_IDS: ${{ join(github.event.client_payload.testCases, ' ') }}
       CALLBACK_URL: ${{ github.event.client_payload.callbackUrl }}
       GITHUB_RUN_ID: ${{ github.run_id }}
       REQUEST_ID: ${{ github.event.client_payload.requestId }}
@@ -38,31 +38,234 @@ jobs:
           echo "🔗 GitHub Run ID: $GITHUB_RUN_ID"
           echo "📝 Request ID: $REQUEST_ID"
           echo "📡 Callback URL: $CALLBACK_URL"
-      
-      - name: Run tests with enhanced reporting
+
+      - name: Send initial test status
+        if: env.CALLBACK_URL != ''
+        run: |
+          echo "📤 Sending initial test status to Quality Tracker..."
+          
+          # Parse test case IDs
+          IFS=' ' read -ra TEST_ARRAY <<< "$TEST_CASE_IDS"
+          
+          # Create initial results JSON with all tests as "Not Started"
+          cat > initial_results.py << 'EOF'
+          import json
+          import os
+          import time
+          
+          test_ids = os.environ.get("TEST_CASE_IDS", "").split()
+          requirement_id = os.environ.get("REQUIREMENT_ID", "")
+          request_id = os.environ.get("REQUEST_ID", "")
+          run_id = os.environ.get("GITHUB_RUN_ID", "")
+          
+          results = []
+          for test_id in test_ids:
+              if test_id.strip():
+                  results.append({
+                      "id": test_id.strip(),
+                      "name": f"Test {test_id.strip()}",
+                      "status": "Not Started",
+                      "duration": 0,
+                      "logs": "Test queued for execution"
+                  })
+          
+          payload = {
+              "requirementId": requirement_id,
+              "requestId": request_id,
+              "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+              "runId": run_id,
+              "results": results,
+              "metadata": {
+                  "totalRequested": len(results),
+                  "source": "github-actions-incremental",
+                  "phase": "initialization"
+              }
+          }
+          
+          with open("current_results.json", "w") as f:
+              json.dump(payload, f, indent=2)
+          
+          print(f"📋 Initialized {len(results)} tests as 'Not Started'")
+          EOF
+          
+          python initial_results.py
+          
+          # Send initial webhook
+          curl -X POST \
+            -H "Content-Type: application/json" \
+            -H "User-Agent: GitHub-Actions-Quality-Tracker-Incremental" \
+            -H "X-GitHub-Run-ID: $GITHUB_RUN_ID" \
+            -H "X-Request-ID: $REQUEST_ID" \
+            -d @current_results.json \
+            "$CALLBACK_URL" \
+            --max-time 30 \
+            --retry 2 \
+            --retry-delay 5 \
+            -s || echo "⚠️ Initial status webhook failed"
+          
+          echo "✅ Initial status sent"
+
+      - name: Run tests incrementally with live updates
         id: run_tests
         run: |
+          echo "🚀 Starting incremental test execution..."
+          
+          # Parse test case IDs into array
+          IFS=' ' read -ra TEST_ARRAY <<< "$TEST_CASE_IDS"
+          TOTAL_TESTS=${#TEST_ARRAY[@]}
+          CURRENT_TEST=0
+          
+          echo "📊 Total tests to run: $TOTAL_TESTS"
+          
           # Create test results directory
           mkdir -p test-results
           
-          # Run pytest with multiple output formats for better parsing
-          python -m pytest -v \
-            -k "$TEST_CASE_IDS" \
-            --junit-xml=test-results/junit.xml \
-            --json-report --json-report-file=test-results/pytest-report.json \
-            --tb=short \
-            || true  # Continue even if tests fail
+          # Function to send webhook update
+          send_update() {
+              local test_id="$1"
+              local status="$2"
+              local duration="$3"
+              local logs="$4"
+              
+              if [ -n "$CALLBACK_URL" ]; then
+                  cat > update_result.py << EOF
+          import json
+          import os
+          import time
+          
+          # Load current results
+          try:
+              with open("current_results.json", "r") as f:
+                  payload = json.load(f)
+          except:
+              payload = {
+                  "requirementId": os.environ.get("REQUIREMENT_ID", ""),
+                  "requestId": os.environ.get("REQUEST_ID", ""),
+                  "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                  "runId": os.environ.get("GITHUB_RUN_ID", ""),
+                  "results": [],
+                  "metadata": {"source": "github-actions-incremental"}
+              }
+          
+          # Update specific test result
+          test_id = "$test_id"
+          status = "$status"
+          duration = int("$duration" or "0")
+          logs = """$logs"""
+          
+          # Find and update the test result
+          updated = False
+          for result in payload["results"]:
+              if result["id"] == test_id:
+                  result["status"] = status
+                  result["duration"] = duration
+                  result["logs"] = logs[:500]  # Limit log length
+                  result["name"] = f"Test {test_id}"
+                  updated = True
+                  break
+          
+          # If not found, add new result
+          if not updated:
+              payload["results"].append({
+                  "id": test_id,
+                  "name": f"Test {test_id}",
+                  "status": status,
+                  "duration": duration,
+                  "logs": logs[:500]
+              })
+          
+          # Update timestamp
+          payload["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+          payload["metadata"]["phase"] = "execution"
+          
+          # Save updated results
+          with open("current_results.json", "w") as f:
+              json.dump(payload, f, indent=2)
+          
+          print(f"📝 Updated {test_id}: {status}")
+          EOF
+                  
+                  python update_result.py
+                  
+                  # Send webhook
+                  curl -X POST \
+                    -H "Content-Type: application/json" \
+                    -H "User-Agent: GitHub-Actions-Quality-Tracker-Incremental" \
+                    -H "X-GitHub-Run-ID: $GITHUB_RUN_ID" \
+                    -H "X-Request-ID: $REQUEST_ID" \
+                    -d @current_results.json \
+                    "$CALLBACK_URL" \
+                    --max-time 30 \
+                    --retry 2 \
+                    --retry-delay 3 \
+                    -s || echo "⚠️ Update webhook failed for $test_id"
+              fi
+          }
+          
+          # Process each test individually
+          for test_id in "${TEST_ARRAY[@]}"; do
+              if [ -z "$test_id" ]; then continue; fi
+              
+              CURRENT_TEST=$((CURRENT_TEST + 1))
+              echo ""
+              echo "🧪 [$CURRENT_TEST/$TOTAL_TESTS] Processing test: $test_id"
+              
+              # Update status to "Running"
+              send_update "$test_id" "Running" "0" "Test execution in progress..."
+              
+              # Run the individual test
+              start_time=$(date +%s)
+              test_output_file="test-results/output-${test_id}.log"
+              
+              echo "▶️  Executing: python -m pytest -v -k \"$test_id\" --tb=short"
+              
+              if python -m pytest -v -k "$test_id" --tb=short \
+                  --junit-xml="test-results/junit-${test_id}.xml" \
+                  --json-report --json-report-file="test-results/json-${test_id}.json" \
+                  > "$test_output_file" 2>&1; then
+                  
+                  test_status="Passed"
+                  echo "✅ Test PASSED: $test_id"
+              else
+                  test_status="Failed"
+                  echo "❌ Test FAILED: $test_id"
+              fi
+              
+              end_time=$(date +%s)
+              duration=$((end_time - start_time))
+              
+              # Get test output (truncated)
+              if [ -f "$test_output_file" ]; then
+                  test_logs=$(head -20 "$test_output_file" | tail -10 | tr '\n' ' ' | sed 's/"/\\"/g')
+              else
+                  test_logs="No output captured"
+              fi
+              
+              # Send final result for this test
+              send_update "$test_id" "$test_status" "$duration" "$test_logs"
+              
+              echo "📊 Test completed: $test_id -> $test_status (${duration}s)"
+              
+              # Small delay to make progress visible
+              sleep 1
+          done
+          
+          echo ""
+          echo "🏁 All individual tests completed!"
         continue-on-error: true
-      
-      - name: Generate Quality Tracker results
+
+      - name: Generate final comprehensive results
         run: |
-          cat > process_results.py << 'EOF'
+          echo "📊 Generating final comprehensive results..."
+          
+          cat > generate_final_results.py << 'EOF'
           import json
           import xml.etree.ElementTree as ET
           import os
           import time
           import re
           from pathlib import Path
+          import glob
           
           def normalize_test_id(test_id):
               """Normalize test ID for matching (TC-001 -> TC_001)"""
@@ -84,43 +287,41 @@ jobs:
           run_id = os.environ.get("GITHUB_RUN_ID", "")
           
           # Parse requested test IDs
-          raw_test_ids = os.environ.get("TEST_CASE_IDS", "").replace(" or ", ",")
-          requested_test_ids = [tid.strip() for tid in raw_test_ids.split(",") if tid.strip()]
+          test_ids = os.environ.get("TEST_CASE_IDS", "").split()
+          requested_test_ids = [tid.strip() for tid in test_ids if tid.strip()]
           
-          print(f"🔍 Processing test results for {len(requested_test_ids)} requested tests")
-          print(f"📋 Requested IDs: {requested_test_ids}")
+          print(f"🔍 Generating final results for {len(requested_test_ids)} tests")
           
-          test_results = []
+          # Load current incremental results
+          final_results = []
           processed_ids = set()
           
-          # Try to parse JUnit XML first (most reliable)
-          junit_path = Path("test-results/junit.xml")
-          if junit_path.exists():
-              print("📄 Processing JUnit XML results...")
+          try:
+              with open("current_results.json", "r") as f:
+                  current_data = json.load(f)
+                  final_results = current_data.get("results", [])
+                  processed_ids = {r["id"] for r in final_results}
+          except:
+              print("⚠️ No current results found, processing from scratch")
+          
+          # Process any additional JUnit XML files for missed tests
+          junit_files = glob.glob("test-results/junit-*.xml")
+          for junit_file in junit_files:
+              print(f"📄 Processing {junit_file}...")
               try:
-                  tree = ET.parse(junit_path)
+                  tree = ET.parse(junit_file)
                   root = tree.getroot()
                   
                   for testcase in root.findall(".//testcase"):
                       name = testcase.get("name", "")
-                      classname = testcase.get("classname", "")
                       time_str = testcase.get("time", "0")
                       
                       # Try to match test ID
                       test_id = extract_test_id_from_name(name, requested_test_ids)
-                      if not test_id:
-                          test_id = extract_test_id_from_name(classname, requested_test_ids)
-                      
-                      if not test_id:
-                          print(f"⚠️ Could not match test '{name}' to requested IDs")
+                      if not test_id or test_id in processed_ids:
                           continue
                       
-                      # Avoid duplicates
-                      if test_id in processed_ids:
-                          continue
-                      processed_ids.add(test_id)
-                      
-                      # Determine status and error message
+                      # Determine status
                       status = "Passed"
                       logs = f"✅ Test {test_id} executed successfully"
                       
@@ -144,28 +345,25 @@ jobs:
                       except (ValueError, TypeError):
                           duration_ms = 0
                       
-                      result = {
+                      final_results.append({
                           "id": test_id,
                           "name": name or f"Test {test_id}",
                           "status": status,
                           "duration": duration_ms,
                           "logs": logs
-                      }
+                      })
                       
-                      test_results.append(result)
-                      print(f"✅ Processed {test_id}: {status} ({duration_ms}ms)")
+                      processed_ids.add(test_id)
+                      print(f"✅ Added missing result: {test_id} -> {status}")
                       
               except Exception as e:
-                  print(f"❌ Error parsing JUnit XML: {e}")
+                  print(f"❌ Error parsing {junit_file}: {e}")
           
-          else:
-              print("⚠️ No JUnit XML found")
-          
-          # Add "Not Run" status for any missing tests
+          # Add "Not Run" for any completely missing tests
           for test_id in requested_test_ids:
               if test_id not in processed_ids:
-                  print(f"📝 Adding 'Not Run' status for missing test: {test_id}")
-                  test_results.append({
+                  print(f"📝 Adding 'Not Run' for missing test: {test_id}")
+                  final_results.append({
                       "id": test_id,
                       "name": f"Test {test_id}",
                       "status": "Not Run",
@@ -173,111 +371,112 @@ jobs:
                       "logs": f"⚠️ Test {test_id} was not found or executed"
                   })
           
-          # Create final result structure
-          result_payload = {
+          # Create final payload
+          final_payload = {
               "requirementId": requirement_id,
               "requestId": request_id,
               "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
               "runId": run_id,
-              "results": test_results,
+              "results": final_results,
               "metadata": {
                   "totalRequested": len(requested_test_ids),
-                  "totalProcessed": len(test_results),
-                  "source": "github-actions",
+                  "totalProcessed": len(final_results),
+                  "source": "github-actions-incremental",
+                  "phase": "completion",
                   "workflow": "quality-tracker-tests"
               }
           }
           
-          # Save results with run-specific filename
-          run_filename = f"results-{run_id}.json"
-          with open(run_filename, "w") as f:
-              json.dump(result_payload, f, indent=2)
+          # Save final results
+          with open("final_results.json", "w") as f:
+              json.dump(final_payload, f, indent=2)
           
-          # Also save as generic filename for backward compatibility
+          # Also save as results.json for backward compatibility
           with open("results.json", "w") as f:
-              json.dump(result_payload, f, indent=2)
+              json.dump(final_payload, f, indent=2)
           
-          print(f"📊 Generated results for {len(test_results)} tests")
-          print(f"💾 Saved to: {run_filename} and results.json")
+          print(f"📊 Final results generated for {len(final_results)} tests")
           
           # Print summary
           status_counts = {}
-          for result in test_results:
+          for result in final_results:
               status = result["status"]
               status_counts[status] = status_counts.get(status, 0) + 1
           
-          print("📈 Test Results Summary:")
+          print("📈 Final Test Results Summary:")
           for status, count in status_counts.items():
               emoji = "✅" if status == "Passed" else "❌" if status == "Failed" else "⏭️"
               print(f"  {emoji} {status}: {count}")
           
           EOF
           
-          # Run the result processor
-          python process_results.py
-      
+          python generate_final_results.py
+
+      - name: Send final completion webhook
+        if: env.CALLBACK_URL != ''
+        run: |
+          echo "📡 Sending final completion status to Quality Tracker..."
+          
+          if [ -f "final_results.json" ]; then
+              echo "📄 Final results payload:"
+              cat final_results.json | jq '.' || cat final_results.json
+              echo ""
+              
+              # Send final webhook
+              HTTP_CODE=$(curl -w "%{http_code}" -o response.txt \
+                -X POST \
+                -H "Content-Type: application/json" \
+                -H "User-Agent: GitHub-Actions-Quality-Tracker-Final" \
+                -H "X-GitHub-Run-ID: $GITHUB_RUN_ID" \
+                -H "X-Request-ID: $REQUEST_ID" \
+                -H "X-Phase: completion" \
+                -d @final_results.json \
+                "$CALLBACK_URL" \
+                --max-time 45 \
+                --retry 3 \
+                --retry-delay 10 \
+                --connect-timeout 15 \
+                -s)
+              
+              echo "📊 Final HTTP Response Code: $HTTP_CODE"
+              echo "📄 Response Body:"
+              cat response.txt
+              
+              if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+                echo "✅ Final webhook sent successfully!"
+              else
+                echo "❌ Final webhook failed with HTTP $HTTP_CODE"
+              fi
+          else
+              echo "❌ No final results file found"
+          fi
+
       - name: Upload test artifacts
         uses: actions/upload-artifact@v4
         with:
           name: test-results-${{ github.run_id }}
           path: |
-            results-${{ github.run_id }}.json
+            final_results.json
             results.json
+            current_results.json
             test-results/
           retention-days: 7
           
-      - name: Send webhook to Quality Tracker
-        if: env.CALLBACK_URL != ''
-        run: |
-          echo "📡 Sending results to Quality Tracker..."
-          echo "🎯 Callback URL: $CALLBACK_URL"
-          echo "📋 Request ID: $REQUEST_ID"
-          echo ""
-          echo "📄 Results payload:"
-          cat results.json | jq '.' || cat results.json
-          echo ""
-          echo "🚀 Sending webhook..."
-          
-          # Send with better error handling and debugging
-          HTTP_CODE=$(curl -w "%{http_code}" -o response.txt \
-            -X POST \
-            -H "Content-Type: application/json" \
-            -H "User-Agent: GitHub-Actions-Quality-Tracker-v2" \
-            -H "X-GitHub-Run-ID: $GITHUB_RUN_ID" \
-            -H "X-Request-ID: $REQUEST_ID" \
-            -d @results.json \
-            "$CALLBACK_URL" \
-            --max-time 45 \
-            --retry 3 \
-            --retry-delay 10 \
-            --connect-timeout 15 \
-            -s)
-          
-          echo "📊 HTTP Response Code: $HTTP_CODE"
-          echo "📄 Response Body:"
-          cat response.txt
-          
-          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-            echo "✅ Webhook sent successfully!"
-          else
-            echo "❌ Webhook failed with HTTP $HTTP_CODE"
-            echo "⚠️ This won't fail the workflow, but results may not reach Quality Tracker"
-          fi
-      
       - name: Workflow Summary
         run: |
-          echo "## 🎯 Quality Tracker Test Execution Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 🎯 Quality Tracker Incremental Test Execution Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Requirement:** $REQUIREMENT_ID - $REQUIREMENT_NAME" >> $GITHUB_STEP_SUMMARY
           echo "**Request ID:** $REQUEST_ID" >> $GITHUB_STEP_SUMMARY
           echo "**Requested Tests:** $TEST_CASE_IDS" >> $GITHUB_STEP_SUMMARY
+          echo "**Execution Mode:** Incremental with real-time updates" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          if [ -f results.json ]; then
-            echo "**Test Results:**" >> $GITHUB_STEP_SUMMARY
+          if [ -f final_results.json ]; then
+            echo "**Final Test Results:**" >> $GITHUB_STEP_SUMMARY
             python3 -c "
           import json
-          with open('results.json') as f:
+          with open('final_results.json') as f:
               data = json.load(f)
           
           results = data.get('results', [])
@@ -291,5 +490,12 @@ jobs:
               print(f'- {emoji} **{status}:** {count}')
           " >> $GITHUB_STEP_SUMMARY
           else
-            echo "❌ No results file generated" >> $GITHUB_STEP_SUMMARY
+            echo "❌ No final results file generated" >> $GITHUB_STEP_SUMMARY
           fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Features:**" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Real-time status updates sent to Quality Tracker" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Individual test progress tracking" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Progressive status: Not Started → Running → Passed/Failed" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Comprehensive final results with fallback processing" >> $GITHUB_STEP_SUMMARY
