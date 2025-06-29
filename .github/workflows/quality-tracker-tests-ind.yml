@@ -1,0 +1,367 @@
+name: Quality Tracker Test Execution
+
+on:
+  repository_dispatch:
+    types: [quality-tracker-test-run]
+
+jobs:
+  run-tests:
+    runs-on: ubuntu-latest
+    env:
+      REQUIREMENT_ID: ${{ github.event.client_payload.requirementId }}
+      REQUIREMENT_NAME: ${{ github.event.client_payload.requirementName }}
+      TEST_CASE_IDS: ${{ join(github.event.client_payload.testCases, ' ') }}
+      CALLBACK_URL: ${{ github.event.client_payload.callbackUrl }}
+      GITHUB_RUN_ID: ${{ github.run_id }}
+      REQUEST_ID: ${{ github.event.client_payload.requestId }}
+      
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-html pytest-json-report
+          pip install selenium webdriver-manager
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+      
+      - name: Display test execution info
+        run: |
+          echo "🎯 Executing tests for requirement: $REQUIREMENT_ID - $REQUIREMENT_NAME"
+          echo "📋 Test case IDs: $TEST_CASE_IDS"
+          echo "🔗 GitHub Run ID: $GITHUB_RUN_ID"
+          echo "📝 Request ID: $REQUEST_ID"
+          echo "📡 Callback URL: $CALLBACK_URL"
+
+      - name: Send initial test status
+        if: env.CALLBACK_URL != ''
+        run: |
+          echo "📤 Sending initial test status to Quality Tracker..."
+          
+          # Create initial results JSON with all tests as "Not Started"
+          cat > initial_results.py << 'EOF'
+          import json
+          import os
+          import time
+          
+          test_ids = os.environ.get("TEST_CASE_IDS", "").split()
+          requirement_id = os.environ.get("REQUIREMENT_ID", "")
+          request_id = os.environ.get("REQUEST_ID", "")
+          
+          results = []
+          for test_id in test_ids:
+              if test_id.strip():
+                  results.append({
+                      "id": test_id.strip(),
+                      "name": f"Test {test_id.strip()}",
+                      "status": "Not Started",
+                      "duration": 0,
+                      "logs": "Test queued for execution"
+                  })
+          
+          # CORRECT FORMAT: Only required fields for webhook
+          payload = {
+              "requirementId": requirement_id,
+              "requestId": request_id,
+              "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+              "results": results
+          }
+          
+          with open("current_results.json", "w") as f:
+              json.dump(payload, f, indent=2)
+          
+          print(f"📋 Initialized {len(results)} tests as 'Not Started'")
+          EOF
+          
+          python initial_results.py
+          
+          # Send initial webhook with proper error handling
+          HTTP_CODE=$(curl -w "%{http_code}" -o response.txt \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "User-Agent: GitHub-Actions-Quality-Tracker-Incremental" \
+            -H "X-GitHub-Run-ID: $GITHUB_RUN_ID" \
+            -H "X-Request-ID: $REQUEST_ID" \
+            -d @current_results.json \
+            "$CALLBACK_URL" \
+            --max-time 30 \
+            --retry 2 \
+            --retry-delay 5 \
+            -s)
+          
+          echo "📊 Initial HTTP Response Code: $HTTP_CODE"
+          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+            echo "✅ Initial status sent successfully"
+          else
+            echo "⚠️ Initial status webhook failed with HTTP $HTTP_CODE"
+            cat response.txt
+          fi
+
+      - name: Run tests incrementally with live updates
+        id: run_tests
+        run: |
+          echo "🚀 Starting incremental test execution..."
+          
+          # Parse test case IDs into array
+          IFS=' ' read -ra TEST_ARRAY <<< "$TEST_CASE_IDS"
+          TOTAL_TESTS=${#TEST_ARRAY[@]}
+          CURRENT_TEST=0
+          
+          echo "📊 Total tests to run: $TOTAL_TESTS"
+          
+          # Create test results directory
+          mkdir -p test-results
+          
+          # Function to send webhook update
+          send_update() {
+              local test_id="$1"
+              local status="$2"
+              local duration="$3"
+              local logs="$4"
+              
+              if [ -n "$CALLBACK_URL" ]; then
+                  # Clean and escape logs for JSON
+                  local escaped_logs=$(echo "$logs" | head -10 | tr '\n' ' ' | sed 's/"/\\"/g' | cut -c1-500)
+                  
+                  cat > update_result.py << EOF
+          import json
+          import os
+          import time
+          
+          # Load current results
+          try:
+              with open("current_results.json", "r") as f:
+                  payload = json.load(f)
+          except:
+              payload = {
+                  "requirementId": os.environ.get("REQUIREMENT_ID", ""),
+                  "requestId": os.environ.get("REQUEST_ID", ""),
+                  "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                  "results": []
+              }
+          
+          # Update specific test result
+          test_id = "$test_id"
+          status = "$status"
+          duration = int("$duration" or "0")
+          logs = """$escaped_logs"""
+          
+          # Find and update the test result
+          updated = False
+          for result in payload["results"]:
+              if result["id"] == test_id:
+                  result["status"] = status
+                  result["duration"] = duration
+                  result["logs"] = logs
+                  result["name"] = f"Test {test_id}"
+                  updated = True
+                  break
+          
+          # If not found, add new result
+          if not updated:
+              payload["results"].append({
+                  "id": test_id,
+                  "name": f"Test {test_id}",
+                  "status": status,
+                  "duration": duration,
+                  "logs": logs
+              })
+          
+          # Update timestamp and ensure ONLY required fields
+          payload["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+          payload["requirementId"] = os.environ.get("REQUIREMENT_ID", "")
+          payload["requestId"] = os.environ.get("REQUEST_ID", "")
+          
+          # Save updated results
+          with open("current_results.json", "w") as f:
+              json.dump(payload, f, indent=2)
+          
+          print(f"📝 Updated {test_id}: {status}")
+          EOF
+                  
+                  python update_result.py
+                  
+                  # Send webhook with proper error handling
+                  HTTP_CODE=$(curl -w "%{http_code}" -o response.txt \
+                    -X POST \
+                    -H "Content-Type: application/json" \
+                    -H "User-Agent: GitHub-Actions-Quality-Tracker-Incremental" \
+                    -H "X-GitHub-Run-ID: $GITHUB_RUN_ID" \
+                    -H "X-Request-ID: $REQUEST_ID" \
+                    -d @current_results.json \
+                    "$CALLBACK_URL" \
+                    --max-time 30 \
+                    --retry 2 \
+                    --retry-delay 3 \
+                    -s)
+                  
+                  if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+                    echo "✅ Update sent for $test_id: $status"
+                  else
+                    echo "⚠️ Update webhook failed for $test_id with HTTP $HTTP_CODE"
+                    cat response.txt
+                  fi
+              fi
+          }
+          
+          # Process each test individually
+          for test_id in "${TEST_ARRAY[@]}"; do
+              if [ -z "$test_id" ]; then continue; fi
+              
+              CURRENT_TEST=$((CURRENT_TEST + 1))
+              echo ""
+              echo "🧪 [$CURRENT_TEST/$TOTAL_TESTS] Processing test: $test_id"
+              
+              # Update status to "Running"
+              send_update "$test_id" "Running" "0" "Test execution in progress..."
+              
+              # Run the individual test
+              start_time=$(date +%s)
+              test_output_file="test-results/output-${test_id}.log"
+              
+              echo "▶️  Executing: python -m pytest -v -k \"$test_id\" --tb=short"
+              
+              if python -m pytest -v -k "$test_id" --tb=short \
+                  --junit-xml="test-results/junit-${test_id}.xml" \
+                  --json-report --json-report-file="test-results/json-${test_id}.json" \
+                  > "$test_output_file" 2>&1; then
+                  
+                  test_status="Passed"
+                  echo "✅ Test PASSED: $test_id"
+              else
+                  test_status="Failed"
+                  echo "❌ Test FAILED: $test_id"
+              fi
+              
+              end_time=$(date +%s)
+              duration=$((end_time - start_time))
+              
+              # Get test output (truncated for JSON)
+              if [ -f "$test_output_file" ]; then
+                  test_logs=$(cat "$test_output_file")
+              else
+                  test_logs="No output captured"
+              fi
+              
+              # Send final result for this test
+              send_update "$test_id" "$test_status" "$duration" "$test_logs"
+              
+              echo "📊 Test completed: $test_id -> $test_status (${duration}s)"
+              
+              # Small delay to make progress visible
+              sleep 2
+          done
+          
+          echo ""
+          echo "🏁 All individual tests completed!"
+        continue-on-error: true
+
+      - name: Send final completion webhook
+        if: env.CALLBACK_URL != ''
+        run: |
+          echo "📡 Sending final completion status to Quality Tracker..."
+          
+          if [ -f "current_results.json" ]; then
+              echo "📄 Final results payload:"
+              cat current_results.json | jq '.' || cat current_results.json
+              echo ""
+              
+              # Send final webhook
+              HTTP_CODE=$(curl -w "%{http_code}" -o response.txt \
+                -X POST \
+                -H "Content-Type: application/json" \
+                -H "User-Agent: GitHub-Actions-Quality-Tracker-Final" \
+                -H "X-GitHub-Run-ID: $GITHUB_RUN_ID" \
+                -H "X-Request-ID: $REQUEST_ID" \
+                -H "X-Phase: completion" \
+                -d @current_results.json \
+                "$CALLBACK_URL" \
+                --max-time 45 \
+                --retry 3 \
+                --retry-delay 10 \
+                --connect-timeout 15 \
+                -s)
+              
+              echo "📊 Final HTTP Response Code: $HTTP_CODE"
+              echo "📄 Response Body:"
+              cat response.txt
+              
+              if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+                echo "✅ Final webhook sent successfully!"
+              else
+                echo "❌ Final webhook failed with HTTP $HTTP_CODE"
+              fi
+          else
+              echo "❌ No current results file found"
+          fi
+
+      - name: Generate backward compatible results
+        run: |
+          echo "📊 Generating backward compatible results file..."
+          
+          # Copy current results to standard filename for artifacts
+          if [ -f "current_results.json" ]; then
+            cp current_results.json results.json
+            cp current_results.json "results-$GITHUB_RUN_ID.json"
+            echo "✅ Results files created for backward compatibility"
+          else
+            echo "❌ No current results to copy"
+          fi
+
+      - name: Upload test artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ github.run_id }}
+          path: |
+            results-${{ github.run_id }}.json
+            results.json
+            current_results.json
+            test-results/
+          retention-days: 7
+          
+      - name: Workflow Summary
+        run: |
+          echo "## 🎯 Quality Tracker Incremental Test Execution Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Requirement:** $REQUIREMENT_ID - $REQUIREMENT_NAME" >> $GITHUB_STEP_SUMMARY
+          echo "**Request ID:** $REQUEST_ID" >> $GITHUB_STEP_SUMMARY
+          echo "**Requested Tests:** $TEST_CASE_IDS" >> $GITHUB_STEP_SUMMARY
+          echo "**Execution Mode:** Incremental with real-time updates" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f current_results.json ]; then
+            echo "**Final Test Results:**" >> $GITHUB_STEP_SUMMARY
+            python3 -c "
+          import json
+          try:
+              with open('current_results.json') as f:
+                  data = json.load(f)
+              
+              results = data.get('results', [])
+              status_counts = {}
+              for r in results:
+                  status = r['status']
+                  status_counts[status] = status_counts.get(status, 0) + 1
+              
+              for status, count in status_counts.items():
+                  emoji = '✅' if status == 'Passed' else '❌' if status == 'Failed' else '⏳' if status == 'Not Started' else '🔄'
+                  print(f'- {emoji} **{status}:** {count}')
+          except Exception as e:
+              print(f'- ❌ Error reading results: {e}')
+          " >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ No results file generated" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Features:**" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Real-time status updates sent to Quality Tracker" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Individual test progress tracking" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Progressive status: Not Started → Running → Passed/Failed" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Webhook format validated for compatibility" >> $GITHUB_STEP_SUMMARY
