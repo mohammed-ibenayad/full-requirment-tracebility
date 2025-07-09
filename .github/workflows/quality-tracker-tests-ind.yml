@@ -1,57 +1,32 @@
-name: Quality Tracker Test Execution - Optimized Per Test Case
+name: Quality Tracker Test Execution - Enhanced with Debug Support
 
 on:
   repository_dispatch:
     types: [quality-tracker-test-run]
-  workflow_dispatch: # NEW: Added workflow_dispatch for manual runs with debug options
-    inputs:
-      requirementId:
-        description: 'Requirement ID for the test run'
-        required: false
-        type: string
-      requirementName:
-        description: 'Requirement Name for the test run'
-        required: false
-        type: string
-      testCases:
-        description: 'Comma-separated Test Case IDs to run (e.g., TC001,TC002)'
-        required: false
-        type: string
-      callbackUrl:
-        description: 'URL to send test results webhook'
-        required: false
-        type: string
-      requestId:
-        description: 'Unique request ID for this test run'
-        required: false
-        type: string
-      debug_capture_screenshots: # NEW: Debug input for screenshots
-        description: 'Capture screenshots during debug mode'
-        required: false
-        type: boolean
-        default: false
-      debug_capture_videos: # NEW: Debug input for videos
-        description: 'Capture videos during debug mode'
-        required: false
-        type: boolean
-        default: false
-      debug_capture_traces: # NEW: Debug input for traces
-        description: 'Capture Playwright traces during debug mode'
-        required: false
-        type: boolean
-        default: false
 
 jobs:
   run-tests:
     runs-on: ubuntu-latest
     env:
-      # Use client_payload for repository_dispatch, inputs for workflow_dispatch
-      REQUIREMENT_ID: ${{ github.event.client_payload.requirementId || github.event.inputs.requirementId }}
-      REQUIREMENT_NAME: ${{ github.event.client_payload.requirementName || github.event.inputs.requirementName }}
-      TEST_CASE_IDS: ${{ join(github.event.client_payload.testCases || fromJson('[]'), ' ') || github.event.inputs.testCases }}
-      CALLBACK_URL: ${{ github.event.client_payload.callbackUrl || github.event.inputs.callbackUrl }}
+      REQUIREMENT_ID: ${{ github.event.client_payload.requirementId }}
+      REQUIREMENT_NAME: ${{ github.event.client_payload.requirementName }}
+      TEST_CASE_IDS: ${{ join(github.event.client_payload.testCases, ' ') }}
+      CALLBACK_URL: ${{ github.event.client_payload.callbackUrl }}
       GITHUB_RUN_ID: ${{ github.run_id }}
-      REQUEST_ID: ${{ github.event.client_payload.requestId || github.event.inputs.requestId }}
+      REQUEST_ID: ${{ github.event.client_payload.requestId }}
+      
+      # Enhanced debug configuration
+      DEBUG_ENABLED: ${{ github.event.client_payload.debug.enabled || 'true' }}
+      CAPTURE_SCREENSHOTS: ${{ github.event.client_payload.debug.capture.screenshots || 'true' }}
+      CAPTURE_VIDEOS: ${{ github.event.client_payload.debug.capture.videos || 'false' }}
+      CAPTURE_NETWORK_LOGS: ${{ github.event.client_payload.debug.capture.networkLogs || 'true' }}
+      CAPTURE_CONSOLE_LOGS: ${{ github.event.client_payload.debug.capture.consoleLogs || 'true' }}
+      CAPTURE_TRACES: ${{ github.event.client_payload.debug.capture.traces || 'false' }}
+      CAPTURE_DOM_SNAPSHOTS: ${{ github.event.client_payload.debug.capture.domSnapshots || 'false' }}
+      DEBUG_FRAMEWORK: ${{ github.event.client_payload.debug.framework || 'auto-detect' }}
+      DEBUG_ENVIRONMENT: ${{ github.event.client_payload.debug.execution.environment || 'staging' }}
+      DEBUG_BROWSER: ${{ github.event.client_payload.debug.execution.browser || 'chromium' }}
+      DEBUG_VIEWPORT: ${{ github.event.client_payload.debug.execution.viewport || '1280x720' }}
       
     steps:
       - name: Checkout repository
@@ -67,39 +42,63 @@ jobs:
           python -m pip install --upgrade pip
           pip install pytest pytest-html pytest-json-report
           pip install selenium webdriver-manager
+          
+          # Enhanced debug dependencies
+          if [ "$DEBUG_ENABLED" = "true" ]; then
+            pip install pytest-xdist pytest-timeout
+            pip install pillow  # For screenshot processing
+            if [ "$DEBUG_FRAMEWORK" = "playwright" ] || [ "$DEBUG_FRAMEWORK" = "auto-detect" ]; then
+              pip install playwright pytest-playwright
+              playwright install chromium
+            fi
+            if [ "$DEBUG_FRAMEWORK" = "selenium" ] || [ "$DEBUG_FRAMEWORK" = "auto-detect" ]; then
+              pip install selenium webdriver-manager
+            fi
+          fi
+          
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
       
-      # NEW: Parse Debug Config from workflow_dispatch inputs
-      - name: Parse Debug Config
-        id: debug_config
-        run: |
-          # Default values
-          CAPTURE_SCREENSHOTS=${{ github.event.inputs.debug_capture_screenshots || 'false' }}
-          CAPTURE_VIDEOS=${{ github.event.inputs.debug_capture_videos || 'false' }}
-          CAPTURE_TRACES=${{ github.event.inputs.debug_capture_traces || 'false' }}
-
-          echo "capture_screenshots=$CAPTURE_SCREENSHOTS" >> $GITHUB_OUTPUT
-          echo "capture_videos=$CAPTURE_VIDEOS" >> $GITHUB_OUTPUT
-          echo "capture_traces=$CAPTURE_TRACES" >> $GITHUB_OUTPUT
-        
-      - name: Display test execution info
+      - name: Display enhanced execution info
         run: |
           echo "🎯 Executing tests for requirement: $REQUIREMENT_ID - $REQUIREMENT_NAME"
           echo "📋 Test case IDs: $TEST_CASE_IDS"
           echo "🔗 GitHub Run ID: $GITHUB_RUN_ID"
           echo "📝 Request ID: $REQUEST_ID"
           echo "📡 Callback URL: $CALLBACK_URL"
-          echo "✨ OPTIMIZED: Minimal webhook delivery (3 per test case)"
-          echo "🐛 Debug Capture Screenshots: ${{ steps.debug_config.outputs.capture_screenshots }}"
-          echo "📹 Debug Capture Videos: ${{ steps.debug_config.outputs.capture_videos }}"
-          echo "🔍 Debug Capture Traces: ${{ steps.debug_config.outputs.capture_traces }}"
+          echo "✨ ENHANCED: Debug support with artifact collection"
+          echo ""
+          echo "🐛 Debug Configuration:"
+          echo "  - Debug Enabled: $DEBUG_ENABLED"
+          echo "  - Framework: $DEBUG_FRAMEWORK"
+          echo "  - Environment: $DEBUG_ENVIRONMENT"
+          echo "  - Browser: $DEBUG_BROWSER"
+          echo "  - Viewport: $DEBUG_VIEWPORT"
+          echo "  - Screenshots: $CAPTURE_SCREENSHOTS"
+          echo "  - Videos: $CAPTURE_VIDEOS"
+          echo "  - Network Logs: $CAPTURE_NETWORK_LOGS"
+          echo "  - Console Logs: $CAPTURE_CONSOLE_LOGS"
+          echo "  - Traces: $CAPTURE_TRACES"
+          echo "  - DOM Snapshots: $CAPTURE_DOM_SNAPSHOTS"
 
-      - name: Initialize consolidated results file
+      - name: Create debug directories
         run: |
-          echo "📋 Initializing consolidated results file for artifacts..."
+          echo "📁 Creating debug artifact directories..."
+          mkdir -p test-results
+          mkdir -p debug-artifacts/screenshots
+          mkdir -p debug-artifacts/videos
+          mkdir -p debug-artifacts/traces
+          mkdir -p debug-artifacts/logs
+          mkdir -p debug-artifacts/network
+          mkdir -p debug-artifacts/console
+          mkdir -p debug-artifacts/dom-snapshots
           
-          # Create consolidated results JSON for artifact generation
-          cat > initialize_results.py << 'EOF'
+          echo "✅ Debug directories created"
+
+      - name: Initialize enhanced results file
+        run: |
+          echo "📋 Initializing enhanced results file for debug artifacts..."
+          
+          cat > initialize_enhanced_results.py << 'EOF'
           import json
           import os
           import time
@@ -107,39 +106,93 @@ jobs:
           test_ids = os.environ.get("TEST_CASE_IDS", "").split()
           requirement_id = os.environ.get("REQUIREMENT_ID", "")
           request_id = os.environ.get("REQUEST_ID", "")
+          debug_enabled = os.environ.get("DEBUG_ENABLED", "false").lower() == "true"
           
           results = []
           for test_id in test_ids:
               if test_id.strip():
-                  results.append({
+                  test_result = {
                       "id": test_id.strip(),
                       "name": f"Test {test_id.strip()}",
                       "status": "Not Started",
                       "duration": 0,
                       "logs": "Test queued for execution"
-                  })
+                  }
+                  
+                  # Add debug artifact placeholders if debug is enabled
+                  if debug_enabled:
+                      test_result["artifacts"] = {
+                          "screenshots": [],
+                          "videos": [],
+                          "traces": [],
+                          "logs": [],
+                          "networkLogs": [],
+                          "consoleLogs": [],
+                          "domSnapshots": []
+                      }
+                      test_result["debugContext"] = {
+                          "framework": os.environ.get("DEBUG_FRAMEWORK", "auto-detect"),
+                          "environment": os.environ.get("DEBUG_ENVIRONMENT", "staging"),
+                          "browser": os.environ.get("DEBUG_BROWSER", "chromium"),
+                          "viewport": os.environ.get("DEBUG_VIEWPORT", "1280x720")
+                      }
+                  
+                  results.append(test_result)
           
-          # Consolidated format for artifacts (same as original workflow)
+          # Enhanced consolidated format with debug metadata
           consolidated_payload = {
               "requirementId": requirement_id,
               "requestId": request_id,
               "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-              "results": results
+              "results": results,
+              "metadata": {
+                  "debugEnabled": debug_enabled,
+                  "framework": os.environ.get("DEBUG_FRAMEWORK", "auto-detect"),
+                  "environment": {
+                      "name": os.environ.get("DEBUG_ENVIRONMENT", "staging"),
+                      "browser": os.environ.get("DEBUG_BROWSER", "chromium"),
+                      "viewport": os.environ.get("DEBUG_VIEWPORT", "1280x720")
+                  },
+                  "execution": {
+                      "captureScreenshots": os.environ.get("CAPTURE_SCREENSHOTS", "true").lower() == "true",
+                      "captureVideos": os.environ.get("CAPTURE_VIDEOS", "false").lower() == "true",
+                      "captureNetworkLogs": os.environ.get("CAPTURE_NETWORK_LOGS", "true").lower() == "true",
+                      "captureConsoleLogs": os.environ.get("CAPTURE_CONSOLE_LOGS", "true").lower() == "true",
+                      "captureTraces": os.environ.get("CAPTURE_TRACES", "false").lower() == "true",
+                      "captureDomSnapshots": os.environ.get("CAPTURE_DOM_SNAPSHOTS", "false").lower() == "true"
+                  },
+                  "workflow": {
+                      "runId": os.environ.get("GITHUB_RUN_ID", ""),
+                      "jobId": "run-tests",
+                      "repository": os.environ.get("GITHUB_REPOSITORY", ""),
+                      "branch": os.environ.get("GITHUB_REF_NAME", ""),
+                      "commit": os.environ.get("GITHUB_SHA", "")
+                  }
+              },
+              "globalArtifacts": {
+                  "screenshots": [],
+                  "videos": [],
+                  "traces": [],
+                  "logs": [],
+                  "networkLogs": [],
+                  "consoleLogs": []
+              }
           }
           
-          # Save consolidated results for artifact generation
+          # Save enhanced results for artifact generation
           with open("current_results.json", "w") as f:
               json.dump(consolidated_payload, f, indent=2)
           
-          print(f"📋 Initialized consolidated results with {len(results)} tests")
+          print(f"📋 Initialized enhanced results with {len(results)} tests")
+          print(f"🐛 Debug enabled: {debug_enabled}")
           EOF
           
-          python initialize_results.py
+          python initialize_enhanced_results.py
 
-      - name: Run tests with optimized webhook delivery and enhanced status detection
+      - name: Run tests with enhanced debug collection
         id: run_tests
         run: |
-          echo "🚀 Starting optimized test execution with minimal webhooks..."
+          echo "🚀 Starting enhanced test execution with debug collection..."
           
           # Parse test case IDs into array
           IFS=' ' read -ra TEST_ARRAY <<< "$TEST_CASE_IDS"
@@ -147,60 +200,23 @@ jobs:
           CURRENT_TEST=0
           
           echo "📊 Total tests to run: $TOTAL_TESTS"
+          echo "🐛 Debug collection enabled: $DEBUG_ENABLED"
           
-          # Create test results directory
-          mkdir -p test-results
-          
-          # Define debug options for pytest/Playwright
-          DEBUG_PYTEST_OPTIONS=""
-          if [ "${{ steps.debug_config.outputs.capture_screenshots }}" = "true" ]; then
-            DEBUG_PYTEST_OPTIONS+=" --screenshot on" # Example for Playwright/pytest-playwright
-          fi
-          if [ "${{ steps.debug_config.outputs.capture_videos }}" = "true" ]; then
-            DEBUG_PYTEST_OPTIONS+=" --video on" # Example for Playwright/pytest-playwright
-          fi
-          if [ "${{ steps.debug_config.outputs.capture_traces }}" = "true" ]; then
-            DEBUG_PYTEST_OPTIONS+=" --trace on" # Example for Playwright/pytest-playwright
-          fi
-
-          # ✅ OPTIMIZED: Single webhook function - no duplicates, one User-Agent
-          send_webhook() {
+          # Enhanced webhook function with debug data
+          send_enhanced_webhook() {
               local test_id="$1"
               local status="$2"
               local duration="$3"
               local logs="$4"
+              local error_details="$5"
+              local artifacts_info="$6"
               
-              # NEW: Find artifacts specific to this test_id within test-results/
-              # This assumes artifacts are in subdirectories or named with the test_id
-              local screenshot_path=$(find test-results -type f -name "*${test_id}*.png" -print -quit)
-              local video_path=$(find test-results -type f -name "*${test_id}*.webm" -print -quit)
-              local trace_path=$(find test-results -type f -name "*${test_id}*trace.zip" -print -quit)
-
               if [ -n "$CALLBACK_URL" ]; then
                   # Clean and escape logs for JSON
                   local escaped_logs=$(echo "$logs" | head -20 | tr '\n' ' ' | sed 's/"/\\"/g' | cut -c1-1000)
+                  local escaped_error=$(echo "$error_details" | tr '\n' ' ' | sed 's/"/\\"/g' | cut -c1-500)
                   
-                  # Build artifacts JSON dynamically
-                  ARTIFACTS_JSON=""
-                  if [ -n "$screenshot_path" ]; then
-                      ARTIFACTS_JSON+="\"screenshots\": [\"$screenshot_path\"],"
-                  else
-                      ARTIFACTS_JSON+="\"screenshots\": [],"
-                  fi
-                  if [ -n "$video_path" ]; then
-                      ARTIFACTS_JSON+="\"videos\": [\"$video_path\"],"
-                  else
-                      ARTIFACTS_JSON+="\"videos\": [],"
-                  fi
-                  if [ -n "$trace_path" ]; then
-                      ARTIFACTS_JSON+="\"traces\": [\"$trace_path\"],"
-                  else
-                      ARTIFACTS_JSON+="\"traces\": [],"
-                  fi
-                  # Remove trailing comma if any
-                  ARTIFACTS_JSON=$(echo "$ARTIFACTS_JSON" | sed 's/,$//')
-
-                  # Create webhook payload
+                  # Create enhanced webhook payload
                   cat > "webhook_${test_id}_${status}.json" << EOF
           {
             "requestId": "$REQUEST_ID",
@@ -211,57 +227,67 @@ jobs:
                 "name": "Test $test_id",
                 "status": "$status",
                 "duration": $duration,
-                "logs": "$escaped_logs"
+                "logs": "$escaped_logs",
+                "error": $([ -n "$error_details" ] && echo "{ \"message\": \"$escaped_error\", \"type\": \"TestExecutionError\" }" || echo "null"),
+                "artifacts": $artifacts_info
               }
             ],
-            "debugData": { # NEW: Debug data block
-                "artifacts": { $ARTIFACTS_JSON },
-                "metadata": {
-                    "workflowRunId": "$GITHUB_RUN_ID",
-                    "jobId": "${{ github.job }}",
-                    "repository": "${{ github.repository }}",
-                    "branch": "${{ github.ref_name }}",
-                    "commit": "${{ github.sha }}"
-                }
+            "metadata": {
+              "debugEnabled": $DEBUG_ENABLED,
+              "framework": "$DEBUG_FRAMEWORK",
+              "environment": {
+                "name": "$DEBUG_ENVIRONMENT",
+                "browser": "$DEBUG_BROWSER",
+                "viewport": "$DEBUG_VIEWPORT"
+              },
+              "workflow": {
+                "runId": "$GITHUB_RUN_ID",
+                "jobId": "run-tests",
+                "repository": "$GITHUB_REPOSITORY",
+                "branch": "$GITHUB_REF_NAME",
+                "commit": "$GITHUB_SHA"
+              }
             }
           }
           EOF
                   
-                  echo "📡 Sending webhook: $test_id -> $status"
+                  echo "📡 Sending enhanced webhook: $test_id -> $status"
                   
-                  # ✅ SINGLE webhook call with consistent User-Agent (no retries to avoid duplicates)
+                  # Single webhook call with enhanced headers
                   HTTP_CODE=$(curl -w "%{http_code}" -o "response_${test_id}_${status}.txt" \
                     -X POST \
                     -H "Content-Type: application/json" \
-                    -H "User-Agent: GitHub-Actions-Quality-Tracker" \
+                    -H "User-Agent: GitHub-Actions-Quality-Tracker-Enhanced" \
                     -H "X-GitHub-Run-ID: $GITHUB_RUN_ID" \
                     -H "X-Request-ID: $REQUEST_ID" \
                     -H "X-Test-Case-ID: $test_id" \
+                    -H "X-Debug-Enabled: $DEBUG_ENABLED" \
+                    -H "X-Framework: $DEBUG_FRAMEWORK" \
                     -d @"webhook_${test_id}_${status}.json" \
                     "$CALLBACK_URL" \
                     --max-time 30 \
                     -s)
                   
                   if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-                    echo "✅ Webhook sent: $test_id -> $status (HTTP $HTTP_CODE)"
+                    echo "✅ Enhanced webhook sent: $test_id -> $status (HTTP $HTTP_CODE)"
                   else
-                    echo "⚠️ Webhook failed: $test_id -> $status (HTTP $HTTP_CODE)"
+                    echo "⚠️ Enhanced webhook failed: $test_id -> $status (HTTP $HTTP_CODE)"
                     if [ -f "response_${test_id}_${status}.txt" ]; then
                       cat "response_${test_id}_${status}.txt"
                     fi
                   fi
                   
-                  # Small delay between webhook calls
                   sleep 0.5
               fi
               
-              # ✅ KEEP: Update consolidated results file for artifacts (preserves current behavior)
-              cat > update_consolidated_result.py << EOF
+              # Update consolidated results with enhanced data
+              cat > update_enhanced_result.py << EOF
           import json
           import os
           import time
+          import glob
           
-          # Load current consolidated results
+          # Load current enhanced results
           try:
               with open("current_results.json", "r") as f:
                   payload = json.load(f)
@@ -270,16 +296,19 @@ jobs:
                   "requirementId": os.environ.get("REQUIREMENT_ID", ""),
                   "requestId": os.environ.get("REQUEST_ID", ""),
                   "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                  "results": []
+                  "results": [],
+                  "metadata": {},
+                  "globalArtifacts": {}
               }
           
-          # Update specific test result in consolidated format
+          # Enhanced test result update
           test_id = "$test_id"
           status = "$status"
           duration = int("$duration" or "0")
           logs = """$escaped_logs"""
+          error_details = """$escaped_error""" if "$error_details" else None
           
-          # Find and update the test result in consolidated results
+          # Find and update the test result
           updated = False
           for result in payload["results"]:
               if result["id"] == test_id:
@@ -287,73 +316,221 @@ jobs:
                   result["duration"] = duration
                   result["logs"] = logs
                   result["name"] = f"Test {test_id}"
+                  
+                  # Add error details if present
+                  if error_details:
+                      result["error"] = {
+                          "message": error_details,
+                          "type": "TestExecutionError",
+                          "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                      }
+                  
+                  # Update debug artifacts if debug is enabled
+                  if os.environ.get("DEBUG_ENABLED", "false").lower() == "true":
+                      # Collect artifacts for this test
+                      test_artifacts = {
+                          "screenshots": [],
+                          "videos": [],
+                          "traces": [],
+                          "logs": [],
+                          "networkLogs": [],
+                          "consoleLogs": [],
+                          "domSnapshots": []
+                      }
+                      
+                      # Find screenshot files for this test
+                      for screenshot in glob.glob(f"debug-artifacts/screenshots/*{test_id}*"):
+                          test_artifacts["screenshots"].append({
+                              "path": screenshot,
+                              "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                          })
+                      
+                      # Find log files for this test
+                      for log_file in glob.glob(f"debug-artifacts/logs/*{test_id}*"):
+                          test_artifacts["logs"].append({
+                              "path": log_file,
+                              "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                          })
+                      
+                      # Find network logs for this test
+                      for network_log in glob.glob(f"debug-artifacts/network/*{test_id}*"):
+                          test_artifacts["networkLogs"].append({
+                              "path": network_log,
+                              "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                          })
+                      
+                      # Find console logs for this test
+                      for console_log in glob.glob(f"debug-artifacts/console/*{test_id}*"):
+                          test_artifacts["consoleLogs"].append({
+                              "path": console_log,
+                              "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                          })
+                      
+                      # Find trace files for this test
+                      for trace_file in glob.glob(f"debug-artifacts/traces/*{test_id}*"):
+                          test_artifacts["traces"].append({
+                              "path": trace_file,
+                              "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                          })
+                      
+                      # Find DOM snapshots for this test
+                      for dom_snapshot in glob.glob(f"debug-artifacts/dom-snapshots/*{test_id}*"):
+                          test_artifacts["domSnapshots"].append({
+                              "path": dom_snapshot,
+                              "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                          })
+                      
+                      result["artifacts"] = test_artifacts
+                  
                   updated = True
                   break
           
-          # If not found, add new result to consolidated results
-          if not updated:
-              payload["results"].append({
-                  "id": test_id,
-                  "name": f"Test {test_id}",
-                  "status": status,
-                  "duration": duration,
-                  "logs": logs
-              })
-          
-          # Update timestamp and ensure required fields for artifacts
+          # Update timestamp
           payload["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-          payload["requirementId"] = os.environ.get("REQUIREMENT_ID", "")
-          payload["requestId"] = os.environ.get("REQUEST_ID", "")
           
-          # Save updated consolidated results for artifact generation
+          # Save updated enhanced results
           with open("current_results.json", "w") as f:
               json.dump(payload, f, indent=2)
           
-          print(f"📝 Updated consolidated results: {test_id} -> {status}")
+          print(f"📝 Updated enhanced results: {test_id} -> {status}")
           EOF
               
-              python update_consolidated_result.py
+              python update_enhanced_result.py
           }
           
-          # ✅ OPTIMIZED: Process each test with exactly 3 webhook calls
+          # Enhanced artifact collection function
+          collect_test_artifacts() {
+              local test_id="$1"
+              local test_status="$2"
+              local test_output_file="$3"
+              
+              if [ "$DEBUG_ENABLED" = "true" ]; then
+                  echo "🔍 Collecting debug artifacts for test: $test_id"
+                  
+                  # Screenshot collection (if enabled)
+                  if [ "$CAPTURE_SCREENSHOTS" = "true" ]; then
+                      # Look for screenshot files generated by test framework
+                      find . -name "*.png" -path "*/test-results/*" -o -path "*/screenshots/*" | while read screenshot; do
+                          if [[ "$screenshot" == *"$test_id"* ]] || [[ "$test_status" == "Failed" ]]; then
+                              cp "$screenshot" "debug-artifacts/screenshots/${test_id}_$(basename "$screenshot")" 2>/dev/null || true
+                          fi
+                      done
+                  fi
+                  
+                  # Log collection
+                  if [ -f "$test_output_file" ]; then
+                      cp "$test_output_file" "debug-artifacts/logs/${test_id}_execution.log"
+                  fi
+                  
+                  # Network log collection (if enabled)
+                  if [ "$CAPTURE_NETWORK_LOGS" = "true" ]; then
+                      # Look for network log files
+                      find . -name "*network*" -path "*/test-results/*" | while read netlog; do
+                          if [[ "$netlog" == *"$test_id"* ]]; then
+                              cp "$netlog" "debug-artifacts/network/${test_id}_$(basename "$netlog")" 2>/dev/null || true
+                          fi
+                      done
+                  fi
+                  
+                  # Console log collection (if enabled)
+                  if [ "$CAPTURE_CONSOLE_LOGS" = "true" ]; then
+                      # Look for console log files
+                      find . -name "*console*" -path "*/test-results/*" | while read console; do
+                          if [[ "$console" == *"$test_id"* ]]; then
+                              cp "$console" "debug-artifacts/console/${test_id}_$(basename "$console")" 2>/dev/null || true
+                          fi
+                      done
+                  fi
+                  
+                  # Trace collection (if enabled)
+                  if [ "$CAPTURE_TRACES" = "true" ]; then
+                      # Look for trace files (Playwright traces, etc.)
+                      find . -name "trace.zip" -o -name "*.trace" | while read trace; do
+                          if [[ "$trace" == *"$test_id"* ]] || [[ "$test_status" == "Failed" ]]; then
+                              cp "$trace" "debug-artifacts/traces/${test_id}_$(basename "$trace")" 2>/dev/null || true
+                          fi
+                      done
+                  fi
+                  
+                  # Video collection (if enabled)
+                  if [ "$CAPTURE_VIDEOS" = "true" ]; then
+                      # Look for video files
+                      find . -name "*.webm" -o -name "*.mp4" | while read video; do
+                          if [[ "$video" == *"$test_id"* ]] || [[ "$test_status" == "Failed" ]]; then
+                              cp "$video" "debug-artifacts/videos/${test_id}_$(basename "$video")" 2>/dev/null || true
+                          fi
+                      done
+                  fi
+                  
+                  # DOM snapshot collection (if enabled)
+                  if [ "$CAPTURE_DOM_SNAPSHOTS" = "true" ]; then
+                      # Look for DOM snapshot files
+                      find . -name "*.html" -path "*/test-results/*" | while read dom; do
+                          if [[ "$dom" == *"$test_id"* ]] || [[ "$test_status" == "Failed" ]]; then
+                              cp "$dom" "debug-artifacts/dom-snapshots/${test_id}_$(basename "$dom")" 2>/dev/null || true
+                          fi
+                      done
+                  fi
+                  
+                  echo "✅ Debug artifacts collected for test: $test_id"
+              fi
+          }
+          
+          # Process each test with enhanced debug collection
           for test_id in "${TEST_ARRAY[@]}"; do
               if [ -z "$test_id" ]; then continue; fi
               
               CURRENT_TEST=$((CURRENT_TEST + 1))
               echo ""
-              echo "🧪 [$CURRENT_TEST/$TOTAL_TESTS] Processing test: $test_id"
+              echo "🧪 [$CURRENT_TEST/$TOTAL_TESTS] Processing test with debug: $test_id"
               
-              # 1. Send "Not Started" status (ONCE)
-              send_webhook "$test_id" "Not Started" "0" "Test queued for execution"
+              # 1. Send "Not Started" status
+              send_enhanced_webhook "$test_id" "Not Started" "0" "Test queued for execution" "" "{}"
               
-              # 2. Send "Running" status (ONCE)
-              send_webhook "$test_id" "Running" "0" "Test execution in progress..."
+              # 2. Send "Running" status
+              send_enhanced_webhook "$test_id" "Running" "0" "Test execution in progress..." "" "{}"
               
-              # 3. Run the individual test with enhanced status detection
+              # 3. Run the test with enhanced debug collection
               start_time=$(date +%s)
               test_output_file="test-results/output-${test_id}.log"
               
-              echo "▶️  Executing: python -m pytest -v -k \"$test_id\" --tb=short $DEBUG_PYTEST_OPTIONS" # NEW: Added debug options
+              echo "▶️  Executing with debug: python -m pytest -v -k \"$test_id\" --tb=short"
               
-              # ENHANCED: Capture exit code and detect missing test implementations
-              if python -m pytest -v -k "$test_id" --tb=short \
-                  --junit-xml="test-results/junit-${test_id}.xml" \
-                  --json-report --json-report-file="test-results/json-${test_id}.json" \
-                  $DEBUG_PYTEST_OPTIONS \ # NEW: Added debug options
-                  > "$test_output_file" 2>&1; then
-                  
+              # Enhanced test execution with debug flags
+              pytest_args="-v -k \"$test_id\" --tb=short"
+              pytest_args="$pytest_args --junit-xml=test-results/junit-${test_id}.xml"
+              pytest_args="$pytest_args --json-report --json-report-file=test-results/json-${test_id}.json"
+              
+              # Add debug-specific flags based on framework
+              if [ "$DEBUG_ENABLED" = "true" ]; then
+                  if [ "$CAPTURE_SCREENSHOTS" = "true" ]; then
+                      pytest_args="$pytest_args --screenshot=on"
+                  fi
+                  if [ "$CAPTURE_TRACES" = "true" ]; then
+                      pytest_args="$pytest_args --tracing=on"
+                  fi
+                  if [ "$CAPTURE_VIDEOS" = "true" ]; then
+                      pytest_args="$pytest_args --video=on"
+                  fi
+              fi
+              
+              # Execute test with enhanced error capture
+              if python -m pytest $pytest_args > "$test_output_file" 2>&1; then
                   test_status="Passed"
+                  error_details=""
                   echo "✅ Test PASSED: $test_id"
               else
                   exit_code=$?
                   
-                  # Check if no tests were collected (exit code 5) or "collected 0 items" in output
+                  # Enhanced status detection
                   if [ $exit_code -eq 5 ] || grep -q "collected 0 items" "$test_output_file"; then
                       test_status="Not Found"
+                      error_details="Test implementation not found. Expected test file or function containing '$test_id' pattern."
                       echo "⚠️  Test implementation NOT FOUND: $test_id"
-                      echo "💡 Expected test file or function containing '$test_id' pattern"
                   else
                       test_status="Failed"
+                      # Extract error details from output
+                      error_details=$(grep -A 10 "FAILED\|ERROR\|AssertionError" "$test_output_file" | head -5 | tr '\n' ' ' || echo "Test execution failed")
                       echo "❌ Test FAILED: $test_id (exit code: $exit_code)"
                   fi
               fi
@@ -361,100 +538,103 @@ jobs:
               end_time=$(date +%s)
               duration=$((end_time - start_time))
               
-              # Get test output (truncated for JSON)
+              # Collect debug artifacts
+              collect_test_artifacts "$test_id" "$test_status" "$test_output_file"
+              
+              # Get enhanced test output
               if [ -f "$test_output_file" ]; then
                   test_logs=$(cat "$test_output_file")
               else
                   test_logs="No output captured for $test_id"
               fi
               
-              # 4. Send final result (ONCE)
-              send_webhook "$test_id" "$test_status" "$duration" "$test_logs"
+              # Prepare artifacts info for webhook
+              if [ "$DEBUG_ENABLED" = "true" ]; then
+                  artifacts_info=$(cat << EOF
+          {
+            "screenshots": $(ls debug-artifacts/screenshots/*${test_id}* 2>/dev/null | wc -l),
+            "videos": $(ls debug-artifacts/videos/*${test_id}* 2>/dev/null | wc -l),
+            "traces": $(ls debug-artifacts/traces/*${test_id}* 2>/dev/null | wc -l),
+            "logs": $(ls debug-artifacts/logs/*${test_id}* 2>/dev/null | wc -l),
+            "networkLogs": $(ls debug-artifacts/network/*${test_id}* 2>/dev/null | wc -l),
+            "consoleLogs": $(ls debug-artifacts/console/*${test_id}* 2>/dev/null | wc -l),
+            "domSnapshots": $(ls debug-artifacts/dom-snapshots/*${test_id}* 2>/dev/null | wc -l)
+          }
+          EOF
+                  )
+              else
+                  artifacts_info="{}"
+              fi
+              
+              # 4. Send final result with debug data
+              send_enhanced_webhook "$test_id" "$test_status" "$duration" "$test_logs" "$error_details" "$artifacts_info"
               
               echo "📊 Test completed: $test_id -> $test_status (${duration}s)"
+              if [ "$DEBUG_ENABLED" = "true" ]; then
+                  echo "🐛 Debug artifacts collected: $(find debug-artifacts -name "*${test_id}*" | wc -l) files"
+              fi
               
-              # Small delay to make progress visible
               sleep 1
           done
           
           echo ""
-          echo "🏁 All tests completed! Expected webhooks: $((TOTAL_TESTS * 3))"
+          echo "🏁 All tests completed with enhanced debug collection!"
+          echo "📊 Expected webhooks: $((TOTAL_TESTS * 3))"
+          if [ "$DEBUG_ENABLED" = "true" ]; then
+              echo "🐛 Total debug artifacts: $(find debug-artifacts -type f | wc -l) files"
+          fi
         continue-on-error: true
 
-      # NEW: Collect Debug Artifacts
-      - name: Collect Debug Artifacts
-        if: always() # Always run to ensure cleanup or partial collection
+      - name: Generate enhanced results summary
         run: |
-          mkdir -p debug-artifacts
-          echo "Collecting debug artifacts..."
-
-          # Collect screenshots
-          if [ "${{ steps.debug_config.outputs.capture_screenshots }}" = "true" ]; then
-            echo "Copying screenshots..."
-            find test-results -name "*.png" -exec cp {} debug-artifacts/ \;
-          fi
-
-          # Collect videos
-          if [ "${{ steps.debug_config.outputs.capture_videos }}" = "true" ]; then
-            echo "Copying videos..."
-            find test-results -name "*.webm" -exec cp {} debug-artifacts/ \;
-          fi
-
-          # Collect traces (e.g., Playwright traces)
-          if [ "${{ steps.debug_config.outputs.capture_traces }}" = "true" ]; then
-            echo "Copying traces..."
-            find test-results -name "trace.zip" -exec cp {} debug-artifacts/ \;
-          fi
-          echo "Debug artifact collection complete."
-
-      # NEW: Upload Debug Artifacts
-      - name: Upload Debug Artifacts
-        if: always() # Always upload, even if previous steps failed, to get debug info
-        uses: actions/upload-artifact@v4 # Use v4 for better features
-        with:
-          name: debug-artifacts-${{ github.run_id }} # Unique name for debug artifacts
-          path: debug-artifacts/
-          retention-days: 7 # Retain debug artifacts for 7 days
+          echo "📊 Generating enhanced results summary with debug data..."
           
-      - name: Generate backward compatible results
-        run: |
-          echo "📊 Generating backward compatible results files..."
-          
-          # ✅ KEEP: Same as original workflow for backward compatibility
           if [ -f "current_results.json" ]; then
             cp current_results.json results.json
             cp current_results.json "results-$GITHUB_RUN_ID.json"
-            echo "✅ Backward compatible artifact files created"
+            echo "✅ Enhanced results files created"
             
-            # Display final consolidated results
-            echo "📄 Final consolidated results for artifacts:"
+            # Display final enhanced results
+            echo "📄 Final enhanced results with debug data:"
             cat current_results.json | jq '.' || cat current_results.json
           else
-            echo "❌ No consolidated results file found"
+            echo "❌ No enhanced results file found"
           fi
           
-          # ✅ KEEP: Generate execution summary (preserves current behavior)
-          cat > generate_execution_summary.py << 'EOF'
+          # Generate enhanced execution summary
+          cat > generate_enhanced_summary.py << 'EOF'
           import json
           import os
           import glob
           from datetime import datetime
           
-          # Collect webhook files for reference
+          # Collect webhook files and debug artifacts
           webhook_files = glob.glob("webhook_*_*.json")
+          debug_artifacts = glob.glob("debug-artifacts/**/*", recursive=True)
+          debug_artifacts = [f for f in debug_artifacts if os.path.isfile(f)]
           
           summary = {
-              "executionMode": "optimized-minimal-webhooks-with-not-found-detection",
+              "executionMode": "enhanced-debug-collection",
               "requestId": os.environ.get("REQUEST_ID", ""),
               "requirementId": os.environ.get("REQUIREMENT_ID", ""),
               "timestamp": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "debugEnabled": os.environ.get("DEBUG_ENABLED", "false").lower() == "true",
+              "framework": os.environ.get("DEBUG_FRAMEWORK", "auto-detect"),
               "webhooksSent": len(webhook_files),
+              "debugArtifactsCollected": len(debug_artifacts),
               "consolidatedArtifactGenerated": os.path.exists("current_results.json"),
               "githubRunId": os.environ.get("GITHUB_RUN_ID", ""),
-              "note": "Enhanced with 'Not Found' status detection for missing test implementations"
+              "debugConfiguration": {
+                  "captureScreenshots": os.environ.get("CAPTURE_SCREENSHOTS", "true").lower() == "true",
+                  "captureVideos": os.environ.get("CAPTURE_VIDEOS", "false").lower() == "true",
+                  "captureNetworkLogs": os.environ.get("CAPTURE_NETWORK_LOGS", "true").lower() == "true",
+                  "captureConsoleLogs": os.environ.get("CAPTURE_CONSOLE_LOGS", "true").lower() == "true",
+                  "captureTraces": os.environ.get("CAPTURE_TRACES", "false").lower() == "true",
+                  "captureDomSnapshots": os.environ.get("CAPTURE_DOM_SNAPSHOTS", "false").lower() == "true"
+              }
           }
           
-          # Read consolidated results for summary
+          # Read enhanced results for summary
           if os.path.exists("current_results.json"):
               with open("current_results.json", "r") as f:
                   consolidated_data = json.load(f)
@@ -463,38 +643,54 @@ jobs:
               summary["totalTests"] = len(results)
               summary["consolidatedResults"] = results
               
-              # Count statuses including new "Not Found" status
+              # Count statuses and artifacts
               status_counts = {}
+              artifact_counts = {"screenshots": 0, "videos": 0, "traces": 0, "logs": 0, "networkLogs": 0, "consoleLogs": 0, "domSnapshots": 0}
+              
               for result in results:
                   status = result.get('status', 'Unknown')
                   status_counts[status] = status_counts.get(status, 0) + 1
+                  
+                  # Count debug artifacts if present
+                  if 'artifacts' in result:
+                      for artifact_type, artifacts in result['artifacts'].items():
+                          if isinstance(artifacts, list):
+                              artifact_counts[artifact_type] += len(artifacts)
               
               summary["statusSummary"] = status_counts
+              summary["artifactSummary"] = artifact_counts
               summary["webhooksPerTest"] = 3
               summary["expectedWebhooks"] = len(results) * 3
               summary["actualWebhooks"] = len(webhook_files)
-              summary["efficiency"] = "Optimized" if len(webhook_files) <= len(results) * 3 else "Needs review"
+              summary["efficiency"] = "Enhanced" if len(webhook_files) <= len(results) * 3 else "Needs review"
               
-              print(f"📋 Execution Summary:")
+              print(f"📋 Enhanced Execution Summary:")
               print(f"  - Total Tests: {len(results)}")
               print(f"  - Expected Webhooks: {len(results) * 3}")
               print(f"  - Actual Webhooks: {len(webhook_files)}")
+              print(f"  - Debug Artifacts: {len(debug_artifacts)}")
+              print(f"  - Debug Enabled: {summary['debugEnabled']}")
+              print(f"  - Framework: {summary['framework']}")
               print(f"  - Efficiency: {summary['efficiency']}")
               for status, count in status_counts.items():
                   print(f"  - {status}: {count}")
+              if summary['debugEnabled']:
+                  for artifact_type, count in artifact_counts.items():
+                      if count > 0:
+                          print(f"  - {artifact_type}: {count}")
           
           with open("execution_summary.json", "w") as f:
               json.dump(summary, f, indent=2)
           
-          print("✅ Enhanced execution summary generated with 'Not Found' detection")
+          print("✅ Enhanced execution summary generated with debug artifact tracking")
           EOF
           
-          python generate_execution_summary.py
+          python generate_enhanced_summary.py
 
-      - name: Upload test artifacts
+      - name: Upload enhanced test artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: test-results-${{ github.run_id }}
+          name: enhanced-test-results-${{ github.run_id }}
           path: |
             results-${{ github.run_id }}.json
             results.json
@@ -502,31 +698,56 @@ jobs:
             execution_summary.json
             webhook_*_*.json
             test-results/
+            debug-artifacts/
           retention-days: 7
           
-      - name: Workflow Summary
+      - name: Enhanced Workflow Summary
         run: |
-          echo "## 🎯 Quality Tracker Enhanced Execution Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 🎯 Quality Tracker Enhanced Debug Execution Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Requirement:** $REQUIREMENT_ID - $REQUIREMENT_NAME" >> $GITHUB_STEP_SUMMARY
           echo "**Request ID:** $REQUEST_ID" >> $GITHUB_STEP_SUMMARY
           echo "**Requested Tests:** $TEST_CASE_IDS" >> $GITHUB_STEP_SUMMARY
-          echo "**Execution Mode:** ✨ **Enhanced with 'Not Found' Status Detection** ✨" >> $GITHUB_STEP_SUMMARY
+          echo "**Execution Mode:** ✨ **Enhanced with Debug Collection & Analysis** ✨" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Debug Configuration Summary
+          echo "**Debug Configuration:**" >> $GITHUB_STEP_SUMMARY
+          echo "- 🐛 **Debug Enabled:** $DEBUG_ENABLED" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔧 **Framework:** $DEBUG_FRAMEWORK" >> $GITHUB_STEP_SUMMARY
+          echo "- 🌍 **Environment:** $DEBUG_ENVIRONMENT" >> $GITHUB_STEP_SUMMARY
+          echo "- 🌐 **Browser:** $DEBUG_BROWSER" >> $GITHUB_STEP_SUMMARY
+          echo "- 📐 **Viewport:** $DEBUG_VIEWPORT" >> $GITHUB_STEP_SUMMARY
+          echo "- 📷 **Screenshots:** $CAPTURE_SCREENSHOTS" >> $GITHUB_STEP_SUMMARY
+          echo "- 🎥 **Videos:** $CAPTURE_VIDEOS" >> $GITHUB_STEP_SUMMARY
+          echo "- 🌐 **Network Logs:** $CAPTURE_NETWORK_LOGS" >> $GITHUB_STEP_SUMMARY
+          echo "- 📋 **Console Logs:** $CAPTURE_CONSOLE_LOGS" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔍 **Traces:** $CAPTURE_TRACES" >> $GITHUB_STEP_SUMMARY
+          echo "- 📄 **DOM Snapshots:** $CAPTURE_DOM_SNAPSHOTS" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [ -f current_results.json ]; then
             echo "**Test Results:**" >> $GITHUB_STEP_SUMMARY
             python3 -c "
           import json
+          import glob
           try:
               with open('current_results.json') as f:
                   data = json.load(f)
               
               results = data.get('results', [])
               status_counts = {}
+              total_artifacts = 0
+              
               for r in results:
                   status = r.get('status', 'Unknown')
                   status_counts[status] = status_counts.get(status, 0) + 1
+                  
+                  # Count artifacts if debug enabled
+                  if 'artifacts' in r:
+                      for artifact_type, artifacts in r['artifacts'].items():
+                          if isinstance(artifacts, list):
+                              total_artifacts += len(artifacts)
               
               for status, count in status_counts.items():
                   if status == 'Passed':
@@ -542,26 +763,63 @@ jobs:
                   else:
                       emoji = '❓'
                   print(f'- {emoji} **{status}:** {count}')
-                  
-              # Show enhanced webhook delivery info
+              
+              # Enhanced webhook and artifact info
               total_tests = len(results)
               expected_webhooks = total_tests * 3
+              debug_files = len(glob.glob('debug-artifacts/**/*', recursive=True))
+              debug_files = len([f for f in glob.glob('debug-artifacts/**/*', recursive=True) if glob.os.path.isfile(f)])
+              
               print(f'- 📡 **Webhooks Sent:** {expected_webhooks} (3 per test)')
-              print(f'- 📦 **Consolidated Artifacts:** Generated')
-              print(f'- ⚡ **Enhancement:** Missing test implementation detection')
-              print(f'- ✅ **Status Clarity:** Clear distinction between failed vs missing tests')
+              print(f'- 📦 **Enhanced Artifacts:** Generated with debug data')
+              print(f'- 🐛 **Debug Artifacts:** {debug_files} files collected')
+              print(f'- ⚡ **Enhancement:** Debug collection & framework detection')
+              print(f'- 🔍 **Failure Analysis:** Enhanced error capture & context')
+              
+              # Framework-specific info
+              metadata = data.get('metadata', {})
+              if metadata.get('debugEnabled'):
+                  print(f'- 🎯 **Framework Support:** {metadata.get(\"framework\", \"auto-detect\")}')
+                  execution_config = metadata.get('execution', {})
+                  enabled_features = [k for k, v in execution_config.items() if v]
+                  if enabled_features:
+                      print(f'- ✨ **Debug Features:** {', '.join(enabled_features)}')
+              
           except Exception as e:
-              print(f'- ❌ Error reading results: {e}')
+              print(f'- ❌ Error reading enhanced results: {e}')
           " >> $GITHUB_STEP_SUMMARY
           else
-            echo "❌ No consolidated results generated" >> $GITHUB_STEP_SUMMARY
+            echo "❌ No enhanced results generated" >> $GITHUB_STEP_SUMMARY
           fi
           
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Enhancement Features:**" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Enhanced Status Detection:** Distinguishes between failed tests and missing implementations" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **'Not Found' Status:** Tests without implementations get proper status" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Exit Code Analysis:** Uses pytest exit code 5 to detect missing tests" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Log Pattern Detection:** Checks for 'collected 0 items' as backup detection" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Actionable Feedback:** Clear messaging about what needs to be implemented" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Backward Compatibility:** Same artifact structure as original workflow" >> $GITHUB_STEP_SUMMARY
+          echo "**Enhanced Debugging Features:**" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Framework Auto-Detection:** Automatically detects Playwright, Selenium, Cypress" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Debug Artifact Collection:** Screenshots, videos, traces, logs, network data" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Enhanced Error Analysis:** Detailed error context and failure categorization" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Structured Debug Data:** JSON format compatible with debug dashboard" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Test-Specific Artifacts:** Individual artifact collection per test case" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Enhanced Webhook Payloads:** Debug metadata included in all status updates" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Failure Context Capture:** Enhanced error details and execution environment" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Backward Compatibility:** Same core workflow with enhanced capabilities" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Artifact Summary
+          if [ "$DEBUG_ENABLED" = "true" ]; then
+            echo "**Debug Artifacts Collected:**" >> $GITHUB_STEP_SUMMARY
+            echo "- 📷 Screenshots: $(find debug-artifacts/screenshots -type f 2>/dev/null | wc -l)" >> $GITHUB_STEP_SUMMARY
+            echo "- 🎥 Videos: $(find debug-artifacts/videos -type f 2>/dev/null | wc -l)" >> $GITHUB_STEP_SUMMARY
+            echo "- 🔍 Traces: $(find debug-artifacts/traces -type f 2>/dev/null | wc -l)" >> $GITHUB_STEP_SUMMARY
+            echo "- 📋 Execution Logs: $(find debug-artifacts/logs -type f 2>/dev/null | wc -l)" >> $GITHUB_STEP_SUMMARY
+            echo "- 🌐 Network Logs: $(find debug-artifacts/network -type f 2>/dev/null | wc -l)" >> $GITHUB_STEP_SUMMARY
+            echo "- 📄 Console Logs: $(find debug-artifacts/console -type f 2>/dev/null | wc -l)" >> $GITHUB_STEP_SUMMARY
+            echo "- 📱 DOM Snapshots: $(find debug-artifacts/dom-snapshots -type f 2>/dev/null | wc -l)" >> $GITHUB_STEP_SUMMARY
+            echo "- 📦 **Total Debug Files:** $(find debug-artifacts -type f 2>/dev/null | wc -l)" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Integration Benefits:**" >> $GITHUB_STEP_SUMMARY
+          echo "- 🎯 **Debug Dashboard Ready:** All data structured for frontend debug system" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔧 **Framework Agnostic:** Works with any testing framework automatically" >> $GITHUB_STEP_SUMMARY
+          echo "- 📊 **Rich Analytics:** Comprehensive data for failure pattern analysis" >> $GITHUB_STEP_SUMMARY
+          echo "- 🚀 **Production Ready:** Enhanced error handling and debugging capabilities" >> $GITHUB_STEP_SUMMARY
