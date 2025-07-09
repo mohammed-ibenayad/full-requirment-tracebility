@@ -3,55 +3,17 @@ name: Quality Tracker Test Execution - Optimized Per Test Case
 on:
   repository_dispatch:
     types: [quality-tracker-test-run]
-  workflow_dispatch: # NEW: Added workflow_dispatch for manual runs with debug options
-    inputs:
-      requirementId:
-        description: 'Requirement ID for the test run'
-        required: false
-        type: string
-      requirementName:
-        description: 'Requirement Name for the test run'
-        required: false
-        type: string
-      testCases:
-        description: 'Comma-separated Test Case IDs to run (e.g., TC001,TC002)'
-        required: false
-        type: string
-      callbackUrl:
-        description: 'URL to send test results webhook'
-        required: false
-        type: string
-      requestId:
-        description: 'Unique request ID for this test run'
-        required: false
-        type: string
-      debug_capture_screenshots: # NEW: Debug input for screenshots
-        description: 'Capture screenshots during debug mode'
-        required: false
-        type: boolean
-        default: false
-      debug_capture_videos: # NEW: Debug input for videos
-        description: 'Capture videos during debug mode'
-        required: false
-        type: boolean
-        default: false
-      debug_capture_traces: # NEW: Debug input for traces
-        description: 'Capture Playwright traces during debug mode'
-        required: false
-        type: boolean
-        default: false
 
 jobs:
   run-tests:
     runs-on: ubuntu-latest
     env:
-      # Use client_payload for repository_dispatch, inputs for workflow_dispatch
-      REQUIREMENT_ID: ${{ github.event.client_payload.requirementId || github.event.inputs.requirementId }}
-      REQUIREMENT_NAME: ${{ github.event.client_payload.requirementName || github.event.inputs.requirementName }}
-      TEST_CASE_IDS: ${{ join(github.event.client_payload.testCases || fromJson('[]'), ' ') || github.event.inputs.testCases }}
-      CALLBACK_URL: ${{ github.event.client_payload.callbackUrl || github.event.inputs.callbackUrl }}
+      REQUIREMENT_ID: ${{ github.event.client_payload.requirementId }}
+      REQUIREMENT_NAME: ${{ github.event.client_payload.requirementName }}
+      TEST_CASE_IDS: ${{ join(github.event.client_payload.testCases, ' ') }}
+      CALLBACK_URL: ${{ github.event.client_payload.callbackUrl }}
       GITHUB_RUN_ID: ${{ github.run_id }}
-      REQUEST_ID: ${{ github.event.client_payload.requestId || github.event.inputs.requestId }}
+      REQUEST_ID: ${{ github.event.client_payload.requestId }}
       
     steps:
       - name: Checkout repository
@@ -69,19 +31,6 @@ jobs:
           pip install selenium webdriver-manager
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
       
-      # NEW: Parse Debug Config from workflow_dispatch inputs
-      - name: Parse Debug Config
-        id: debug_config
-        run: |
-          # Default values
-          CAPTURE_SCREENSHOTS=${{ github.event.inputs.debug_capture_screenshots || 'false' }}
-          CAPTURE_VIDEOS=${{ github.event.inputs.debug_capture_videos || 'false' }}
-          CAPTURE_TRACES=${{ github.event.inputs.debug_capture_traces || 'false' }}
-
-          echo "capture_screenshots=$CAPTURE_SCREENSHOTS" >> $GITHUB_OUTPUT
-          echo "capture_videos=$CAPTURE_VIDEOS" >> $GITHUB_OUTPUT
-          echo "capture_traces=$CAPTURE_TRACES" >> $GITHUB_OUTPUT
-        
       - name: Display test execution info
         run: |
           echo "🎯 Executing tests for requirement: $REQUIREMENT_ID - $REQUIREMENT_NAME"
@@ -90,9 +39,6 @@ jobs:
           echo "📝 Request ID: $REQUEST_ID"
           echo "📡 Callback URL: $CALLBACK_URL"
           echo "✨ OPTIMIZED: Minimal webhook delivery (3 per test case)"
-          echo "🐛 Debug Capture Screenshots: ${{ steps.debug_config.outputs.capture_screenshots }}"
-          echo "📹 Debug Capture Videos: ${{ steps.debug_config.outputs.capture_videos }}"
-          echo "🔍 Debug Capture Traces: ${{ steps.debug_config.outputs.capture_traces }}"
 
       - name: Initialize consolidated results file
         run: |
@@ -151,39 +97,17 @@ jobs:
           # Create test results directory
           mkdir -p test-results
           
-          # Define debug options for pytest/Playwright
-          DEBUG_PYTEST_OPTIONS=""
-          if [ "${{ steps.debug_config.outputs.capture_screenshots }}" = "true" ]; then
-            DEBUG_PYTEST_OPTIONS+=" --screenshot on" # Example for Playwright/pytest-playwright
-          fi
-          if [ "${{ steps.debug_config.outputs.capture_videos }}" = "true" ]; then
-            DEBUG_PYTEST_OPTIONS+=" --video on" # Example for Playwright/pytest-playwright
-          fi
-          if [ "${{ steps.debug_config.outputs.capture_traces }}" = "true" ]; then
-            DEBUG_PYTEST_OPTIONS+=" --trace on" # Example for Playwright/pytest-playwright
-          fi
-
           # ✅ OPTIMIZED: Single webhook function - no duplicates, one User-Agent
           send_webhook() {
               local test_id="$1"
               local status="$2"
               local duration="$3"
               local logs="$4"
-              local screenshot_path="$5" # NEW: Screenshot path
-              local video_path="$6"      # NEW: Video path
-              local trace_path="$7"      # NEW: Trace path
               
               if [ -n "$CALLBACK_URL" ]; then
                   # Clean and escape logs for JSON
                   local escaped_logs=$(echo "$logs" | head -20 | tr '\n' ' ' | sed 's/"/\\"/g' | cut -c1-1000)
                   
-                  # Build artifacts JSON
-                  ARTIFACTS_JSON="\"artifacts\": {"
-                  ARTIFACTS_JSON+="\"screenshots\": $(if [ -f "$screenshot_path" ]; then echo "[\"$screenshot_path\"]"; else echo "[]"; fi),"
-                  ARTIFACTS_JSON+="\"videos\": $(if [ -f "$video_path" ]; then echo "[\"$video_path\"]"; else echo "[]"; fi),"
-                  ARTIFACTS_JSON+="\"traces\": $(if [ -f "$trace_path" ]; then echo "[\"$trace_path\"]"; else echo "[]"; fi)"
-                  ARTIFACTS_JSON+="}"
-
                   # Create webhook payload
                   cat > "webhook_${test_id}_${status}.json" << EOF
           {
@@ -197,15 +121,7 @@ jobs:
                 "duration": $duration,
                 "logs": "$escaped_logs"
               }
-            ],
-            $ARTIFACTS_JSON, # NEW: Include artifacts
-            "metadata": { # NEW: Include metadata
-              "workflowRunId": "$GITHUB_RUN_ID",
-              "jobId": "${{ github.job }}",
-              "repository": "${{ github.repository }}",
-              "branch": "${{ github.ref_name }}",
-              "commit": "${{ github.sha }}"
-            }
+            ]
           }
           EOF
                   
@@ -306,22 +222,21 @@ jobs:
               echo "🧪 [$CURRENT_TEST/$TOTAL_TESTS] Processing test: $test_id"
               
               # 1. Send "Not Started" status (ONCE)
-              send_webhook "$test_id" "Not Started" "0" "Test queued for execution" "" "" ""
+              send_webhook "$test_id" "Not Started" "0" "Test queued for execution"
               
               # 2. Send "Running" status (ONCE)
-              send_webhook "$test_id" "Running" "0" "Test execution in progress..." "" "" ""
+              send_webhook "$test_id" "Running" "0" "Test execution in progress..."
               
               # 3. Run the individual test with enhanced status detection
               start_time=$(date +%s)
               test_output_file="test-results/output-${test_id}.log"
               
-              echo "▶️  Executing: python -m pytest -v -k \"$test_id\" --tb=short $DEBUG_PYTEST_OPTIONS" # NEW: Added debug options
+              echo "▶️  Executing: python -m pytest -v -k \"$test_id\" --tb=short"
               
               # ENHANCED: Capture exit code and detect missing test implementations
               if python -m pytest -v -k "$test_id" --tb=short \
                   --junit-xml="test-results/junit-${test_id}.xml" \
                   --json-report --json-report-file="test-results/json-${test_id}.json" \
-                  $DEBUG_PYTEST_OPTIONS \ # NEW: Added debug options
                   > "$test_output_file" 2>&1; then
                   
                   test_status="Passed"
@@ -349,27 +264,9 @@ jobs:
               else
                   test_logs="No output captured for $test_id"
               fi
-
-              # NEW: Determine artifact paths for the webhook
-              SCREENSHOT_PATH=""
-              VIDEO_PATH=""
-              TRACE_PATH=""
-
-              if [ "${{ steps.debug_config.outputs.capture_screenshots }}" = "true" ]; then
-                # Assuming screenshots are named like test_id.png within test-results/
-                SCREENSHOT_PATH=$(find test-results -name "*${test_id}*.png" -print -quit)
-              fi
-              if [ "${{ steps.debug_config.outputs.capture_videos }}" = "true" ]; then
-                # Assuming videos are named like test_id.webm within test-results/
-                VIDEO_PATH=$(find test-results -name "*${test_id}*.webm" -print -quit)
-              fi
-              if [ "${{ steps.debug_config.outputs.capture_traces }}" = "true" ]; then
-                # Assuming traces are named like trace.zip within a test-specific directory
-                TRACE_PATH=$(find test-results -name "trace.zip" -print -quit)
-              fi
               
-              # 4. Send final result (ONCE) with artifact paths
-              send_webhook "$test_id" "$test_status" "$duration" "$test_logs" "$SCREENSHOT_PATH" "$VIDEO_PATH" "$TRACE_PATH"
+              # 4. Send final result (ONCE)
+              send_webhook "$test_id" "$test_status" "$duration" "$test_logs"
               
               echo "📊 Test completed: $test_id -> $test_status (${duration}s)"
               
@@ -381,41 +278,6 @@ jobs:
           echo "🏁 All tests completed! Expected webhooks: $((TOTAL_TESTS * 3))"
         continue-on-error: true
 
-      # NEW: Collect Debug Artifacts
-      - name: Collect Debug Artifacts
-        if: always() # Always run to ensure cleanup or partial collection
-        run: |
-          mkdir -p debug-artifacts
-          echo "Collecting debug artifacts..."
-
-          # Collect screenshots
-          if [ "${{ steps.debug_config.outputs.capture_screenshots }}" = "true" ]; then
-            echo "Copying screenshots..."
-            find test-results -name "*.png" -exec cp {} debug-artifacts/ \;
-          fi
-
-          # Collect videos
-          if [ "${{ steps.debug_config.outputs.capture_videos }}" = "true" ]; then
-            echo "Copying videos..."
-            find test-results -name "*.webm" -exec cp {} debug-artifacts/ \;
-          fi
-
-          # Collect traces (e.g., Playwright traces)
-          if [ "${{ steps.debug_config.outputs.capture_traces }}" = "true" ]; then
-            echo "Copying traces..."
-            find test-results -name "trace.zip" -exec cp {} debug-artifacts/ \;
-          fi
-          echo "Debug artifact collection complete."
-
-      # NEW: Upload Debug Artifacts
-      - name: Upload Debug Artifacts
-        if: always() # Always upload, even if previous steps failed, to get debug info
-        uses: actions/upload-artifact@v4 # Use v4 for better features
-        with:
-          name: debug-artifacts-${{ github.run_id }} # Unique name for debug artifacts
-          path: debug-artifacts/
-          retention-days: 7 # Retain debug artifacts for 7 days
-          
       - name: Generate backward compatible results
         run: |
           echo "📊 Generating backward compatible results files..."
