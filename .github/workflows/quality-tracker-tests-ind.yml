@@ -281,119 +281,119 @@ jobs:
               fi
               
               # Update consolidated results with enhanced data
-              cat > update_enhanced_result.py << 'EOF'
-          import json
-          import os
-          import time
-          import glob
-          
-          # Load current enhanced results
-          try:
-              with open("current_results.json", "r") as f:
-                  payload = json.load(f)
-          except:
-              payload = {
-                  "requirementId": os.environ.get("REQUIREMENT_ID", ""),
-                  "requestId": os.environ.get("REQUEST_ID", ""),
-                  "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                  "results": [],
-                  "metadata": {},
-                  "globalArtifacts": {}
-              }
-          
-          # Enhanced test result update
-          test_id = "$test_id"
-          status = "$status"
-          duration = int("$duration" or "0")
-          logs = """$escaped_logs"""
-          error_details = """$escaped_error""" if "$escaped_error" else None
-          
-          # Find and update the test result
-          updated = False
-          for result in payload["results"]:
-              if result["id"] == test_id:
-                  result["status"] = status
-                  result["duration"] = duration
-                  result["logs"] = logs
-                  result["name"] = f"Test {test_id}"
-                  
-                  # Add error details if present
-                  if error_details and error_details.strip():
-                      result["error"] = {
-                          "message": error_details[:500],  # Limit error message length
-                          "type": "TestExecutionError",
-                          "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                      }
-                  
-                  # Update debug artifacts if debug is enabled
-                  if os.environ.get("DEBUG_ENABLED", "false").lower() == "true":
-                      # Collect artifacts for this test
-                      test_artifacts = {
-                          "screenshots": [],
-                          "videos": [],
-                          "traces": [],
-                          "logs": [],
-                          "networkLogs": [],
-                          "consoleLogs": [],
-                          "domSnapshots": []
-                      }
-                      
-                      # Find screenshot files for this test
-                      for screenshot in glob.glob(f"debug-artifacts/screenshots/*{test_id}*"):
-                          test_artifacts["screenshots"].append({
-                              "path": screenshot,
-                              "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                          })
-                      
-                      # Find log files for this test
-                      for log_file in glob.glob(f"debug-artifacts/logs/*{test_id}*"):
-                          test_artifacts["logs"].append({
-                              "path": log_file,
-                              "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                          })
-                      
-                      # Find network logs for this test
-                      for network_log in glob.glob(f"debug-artifacts/network/*{test_id}*"):
-                          test_artifacts["networkLogs"].append({
-                              "path": network_log,
-                              "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                          })
-                      
-                      # Find console logs for this test
-                      for console_log in glob.glob(f"debug-artifacts/console/*{test_id}*"):
-                          test_artifacts["consoleLogs"].append({
-                              "path": console_log,
-                              "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                          })
-                      
-                      # Find trace files for this test
-                      for trace_file in glob.glob(f"debug-artifacts/traces/*{test_id}*"):
-                          test_artifacts["traces"].append({
-                              "path": trace_file,
-                              "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                          })
-                      
-                      # Find DOM snapshots for this test
-                      for dom_snapshot in glob.glob(f"debug-artifacts/dom-snapshots/*{test_id}*"):
-                          test_artifacts["domSnapshots"].append({
-                              "path": dom_snapshot,
-                              "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                          })
-                      
-                      result["artifacts"] = test_artifacts
-                  
-                  updated = True
-                  break
-          
-          # Update timestamp
-          payload["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-          
-          # Save updated enhanced results
-          with open("current_results.json", "w") as f:
-              json.dump(payload, f, indent=2)
-          
-          print(f"Updated enhanced results: {test_id} -> {status}")
-          EOF
+              cat > update_enhanced_result.py << EOF
+import json
+import os
+import time
+import glob
+
+# Load current enhanced results
+try:
+    with open("current_results.json", "r") as f:
+        payload = json.load(f)
+except:
+    payload = {
+        "requirementId": os.environ.get("REQUIREMENT_ID", ""),
+        "requestId": os.environ.get("REQUEST_ID", ""),
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "results": [],
+        "metadata": {},
+        "globalArtifacts": {}
+    }
+
+# Enhanced test result update
+test_id = "${test_id}"
+status = "${status}"
+duration = int("${duration}" if "${duration}" else "0")
+logs = """${escaped_logs}"""
+error_details = """${escaped_error}""" if "${escaped_error}" else None
+
+# Find and update the test result
+updated = False
+for result in payload["results"]:
+    if result["id"] == test_id:
+        result["status"] = status
+        result["duration"] = duration
+        result["logs"] = logs
+        result["name"] = f"Test {test_id}"
+        
+        # Add error details if present
+        if error_details and error_details.strip():
+            result["error"] = {
+                "message": error_details[:500],  # Limit error message length
+                "type": "TestExecutionError",
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            }
+        
+        # Update debug artifacts if debug is enabled
+        if os.environ.get("DEBUG_ENABLED", "false").lower() == "true":
+            # Collect artifacts for this test
+            test_artifacts = {
+                "screenshots": [],
+                "videos": [],
+                "traces": [],
+                "logs": [],
+                "networkLogs": [],
+                "consoleLogs": [],
+                "domSnapshots": []
+            }
+            
+            # Find screenshot files for this test
+            for screenshot in glob.glob(f"debug-artifacts/screenshots/*{test_id}*"):
+                test_artifacts["screenshots"].append({
+                    "path": screenshot,
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                })
+            
+            # Find log files for this test
+            for log_file in glob.glob(f"debug-artifacts/logs/*{test_id}*"):
+                test_artifacts["logs"].append({
+                    "path": log_file,
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                })
+            
+            # Find network logs for this test
+            for network_log in glob.glob(f"debug-artifacts/network/*{test_id}*"):
+                test_artifacts["networkLogs"].append({
+                    "path": network_log,
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                })
+            
+            # Find console logs for this test
+            for console_log in glob.glob(f"debug-artifacts/console/*{test_id}*"):
+                test_artifacts["consoleLogs"].append({
+                    "path": console_log,
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                })
+            
+            # Find trace files for this test
+            for trace_file in glob.glob(f"debug-artifacts/traces/*{test_id}*"):
+                test_artifacts["traces"].append({
+                    "path": trace_file,
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                })
+            
+            # Find DOM snapshots for this test
+            for dom_snapshot in glob.glob(f"debug-artifacts/dom-snapshots/*{test_id}*"):
+                test_artifacts["domSnapshots"].append({
+                    "path": dom_snapshot,
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                })
+            
+            result["artifacts"] = test_artifacts
+        
+        updated = True
+        break
+
+# Update timestamp
+payload["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+# Save updated enhanced results
+with open("current_results.json", "w") as f:
+    json.dump(payload, f, indent=2)
+
+print(f"Updated enhanced results: {test_id} -> {status}")
+EOF
               
               python update_enhanced_result.py
           }
