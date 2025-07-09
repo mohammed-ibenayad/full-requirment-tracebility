@@ -82,7 +82,7 @@ jobs:
           
           python initialize_results.py
 
-      - name: Run tests with optimized webhook delivery
+      - name: Run tests with optimized webhook delivery and enhanced status detection
         id: run_tests
         run: |
           echo "🚀 Starting optimized test execution with minimal webhooks..."
@@ -227,12 +227,13 @@ jobs:
               # 2. Send "Running" status (ONCE)
               send_webhook "$test_id" "Running" "0" "Test execution in progress..."
               
-              # 3. Run the individual test
+              # 3. Run the individual test with enhanced status detection
               start_time=$(date +%s)
               test_output_file="test-results/output-${test_id}.log"
               
               echo "▶️  Executing: python -m pytest -v -k \"$test_id\" --tb=short"
               
+              # ENHANCED: Capture exit code and detect missing test implementations
               if python -m pytest -v -k "$test_id" --tb=short \
                   --junit-xml="test-results/junit-${test_id}.xml" \
                   --json-report --json-report-file="test-results/json-${test_id}.json" \
@@ -241,8 +242,17 @@ jobs:
                   test_status="Passed"
                   echo "✅ Test PASSED: $test_id"
               else
-                  test_status="Failed"
-                  echo "❌ Test FAILED: $test_id"
+                  exit_code=$?
+                  
+                  # Check if no tests were collected (exit code 5) or "collected 0 items" in output
+                  if [ $exit_code -eq 5 ] || grep -q "collected 0 items" "$test_output_file"; then
+                      test_status="Not Found"
+                      echo "⚠️  Test implementation NOT FOUND: $test_id"
+                      echo "💡 Expected test file or function containing '$test_id' pattern"
+                  else
+                      test_status="Failed"
+                      echo "❌ Test FAILED: $test_id (exit code: $exit_code)"
+                  fi
               fi
               
               end_time=$(date +%s)
@@ -296,14 +306,14 @@ jobs:
           webhook_files = glob.glob("webhook_*_*.json")
           
           summary = {
-              "executionMode": "optimized-minimal-webhooks",
+              "executionMode": "optimized-minimal-webhooks-with-not-found-detection",
               "requestId": os.environ.get("REQUEST_ID", ""),
               "requirementId": os.environ.get("REQUIREMENT_ID", ""),
               "timestamp": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
               "webhooksSent": len(webhook_files),
               "consolidatedArtifactGenerated": os.path.exists("current_results.json"),
               "githubRunId": os.environ.get("GITHUB_RUN_ID", ""),
-              "note": "Optimized to 3 webhooks per test case + consolidated artifacts"
+              "note": "Enhanced with 'Not Found' status detection for missing test implementations"
           }
           
           # Read consolidated results for summary
@@ -315,7 +325,7 @@ jobs:
               summary["totalTests"] = len(results)
               summary["consolidatedResults"] = results
               
-              # Count statuses
+              # Count statuses including new "Not Found" status
               status_counts = {}
               for result in results:
                   status = result.get('status', 'Unknown')
@@ -338,7 +348,7 @@ jobs:
           with open("execution_summary.json", "w") as f:
               json.dump(summary, f, indent=2)
           
-          print("✅ Optimized execution summary generated")
+          print("✅ Enhanced execution summary generated with 'Not Found' detection")
           EOF
           
           python generate_execution_summary.py
@@ -358,12 +368,12 @@ jobs:
           
       - name: Workflow Summary
         run: |
-          echo "## 🎯 Quality Tracker Optimized Execution Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 🎯 Quality Tracker Enhanced Execution Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Requirement:** $REQUIREMENT_ID - $REQUIREMENT_NAME" >> $GITHUB_STEP_SUMMARY
           echo "**Request ID:** $REQUEST_ID" >> $GITHUB_STEP_SUMMARY
           echo "**Requested Tests:** $TEST_CASE_IDS" >> $GITHUB_STEP_SUMMARY
-          echo "**Execution Mode:** ✨ **Optimized Minimal Webhooks (3 per test)** ✨" >> $GITHUB_STEP_SUMMARY
+          echo "**Execution Mode:** ✨ **Enhanced with 'Not Found' Status Detection** ✨" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [ -f current_results.json ]; then
@@ -381,16 +391,27 @@ jobs:
                   status_counts[status] = status_counts.get(status, 0) + 1
               
               for status, count in status_counts.items():
-                  emoji = '✅' if status == 'Passed' else '❌' if status == 'Failed' else '⏳' if status == 'Not Started' else '🔄' if status == 'Running' else '❓'
+                  if status == 'Passed':
+                      emoji = '✅'
+                  elif status == 'Failed':
+                      emoji = '❌'
+                  elif status == 'Not Found':
+                      emoji = '⚠️'
+                  elif status == 'Not Started':
+                      emoji = '⏳'
+                  elif status == 'Running':
+                      emoji = '🔄'
+                  else:
+                      emoji = '❓'
                   print(f'- {emoji} **{status}:** {count}')
                   
-              # Show optimized webhook delivery info
+              # Show enhanced webhook delivery info
               total_tests = len(results)
               expected_webhooks = total_tests * 3
               print(f'- 📡 **Webhooks Sent:** {expected_webhooks} (3 per test)')
               print(f'- 📦 **Consolidated Artifacts:** Generated')
-              print(f'- ⚡ **Optimization:** Minimal webhook pattern')
-              print(f'- ✅ **Efficiency:** No duplicate webhooks')
+              print(f'- ⚡ **Enhancement:** Missing test implementation detection')
+              print(f'- ✅ **Status Clarity:** Clear distinction between failed vs missing tests')
           except Exception as e:
               print(f'- ❌ Error reading results: {e}')
           " >> $GITHUB_STEP_SUMMARY
@@ -399,10 +420,10 @@ jobs:
           fi
           
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Optimization Features:**" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Minimal webhooks:** Exactly 3 per test case (Not Started → Running → Result)" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Single User-Agent:** Consistent GitHub-Actions-Quality-Tracker identifier" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **No duplicates:** Eliminated multiple webhook sources" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Backward compatibility:** Same artifact structure as original workflow" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Real-time updates:** Progressive status per test case" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Reliable delivery:** No retry logic to prevent duplicates" >> $GITHUB_STEP_SUMMARY
+          echo "**Enhancement Features:**" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Enhanced Status Detection:** Distinguishes between failed tests and missing implementations" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **'Not Found' Status:** Tests without implementations get proper status" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Exit Code Analysis:** Uses pytest exit code 5 to detect missing tests" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Log Pattern Detection:** Checks for 'collected 0 items' as backup detection" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Actionable Feedback:** Clear messaging about what needs to be implemented" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Backward Compatibility:** Same artifact structure as original workflow" >> $GITHUB_STEP_SUMMARY
