@@ -281,7 +281,7 @@ jobs:
               fi
               
               # Update consolidated results with enhanced data
-              cat > update_enhanced_result.py << EOF
+              cat > update_enhanced_result.py << 'EOF'
           import json
           import os
           import time
@@ -306,7 +306,7 @@ jobs:
           status = "$status"
           duration = int("$duration" or "0")
           logs = """$escaped_logs"""
-          error_details = """$escaped_error""" if "$error_details" else None
+          error_details = """$escaped_error""" if "$escaped_error" else None
           
           # Find and update the test result
           updated = False
@@ -318,9 +318,9 @@ jobs:
                   result["name"] = f"Test {test_id}"
                   
                   # Add error details if present
-                  if error_details:
+                  if error_details and error_details.strip():
                       result["error"] = {
-                          "message": error_details,
+                          "message": error_details[:500],  # Limit error message length
                           "type": "TestExecutionError",
                           "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                       }
@@ -392,7 +392,7 @@ jobs:
           with open("current_results.json", "w") as f:
               json.dump(payload, f, indent=2)
           
-          print(f"📝 Updated enhanced results: {test_id} -> {status}")
+          print(f"Updated enhanced results: {test_id} -> {status}")
           EOF
               
               python update_enhanced_result.py
@@ -529,8 +529,8 @@ jobs:
                       echo "⚠️  Test implementation NOT FOUND: $test_id"
                   else
                       test_status="Failed"
-                      # Extract error details from output
-                      error_details=$(grep -A 10 "FAILED\|ERROR\|AssertionError" "$test_output_file" | head -5 | tr '\n' ' ' || echo "Test execution failed")
+                      # Extract error details from output (escape for bash)
+                      error_details=$(grep -A 10 "FAILED\|ERROR\|AssertionError" "$test_output_file" | head -5 | tr '\n' ' ' | sed 's/"/\\"/g' | cut -c1-500 || echo "Test execution failed")
                       echo "❌ Test FAILED: $test_id (exit code: $exit_code)"
                   fi
               fi
@@ -550,15 +550,23 @@ jobs:
               
               # Prepare artifacts info for webhook
               if [ "$DEBUG_ENABLED" = "true" ]; then
+                  screenshots_count=$(ls debug-artifacts/screenshots/*${test_id}* 2>/dev/null | wc -l)
+                  videos_count=$(ls debug-artifacts/videos/*${test_id}* 2>/dev/null | wc -l)
+                  traces_count=$(ls debug-artifacts/traces/*${test_id}* 2>/dev/null | wc -l)
+                  logs_count=$(ls debug-artifacts/logs/*${test_id}* 2>/dev/null | wc -l)
+                  network_count=$(ls debug-artifacts/network/*${test_id}* 2>/dev/null | wc -l)
+                  console_count=$(ls debug-artifacts/console/*${test_id}* 2>/dev/null | wc -l)
+                  dom_count=$(ls debug-artifacts/dom-snapshots/*${test_id}* 2>/dev/null | wc -l)
+                  
                   artifacts_info=$(cat << EOF
           {
-            "screenshots": $(ls debug-artifacts/screenshots/*${test_id}* 2>/dev/null | wc -l),
-            "videos": $(ls debug-artifacts/videos/*${test_id}* 2>/dev/null | wc -l),
-            "traces": $(ls debug-artifacts/traces/*${test_id}* 2>/dev/null | wc -l),
-            "logs": $(ls debug-artifacts/logs/*${test_id}* 2>/dev/null | wc -l),
-            "networkLogs": $(ls debug-artifacts/network/*${test_id}* 2>/dev/null | wc -l),
-            "consoleLogs": $(ls debug-artifacts/console/*${test_id}* 2>/dev/null | wc -l),
-            "domSnapshots": $(ls debug-artifacts/dom-snapshots/*${test_id}* 2>/dev/null | wc -l)
+            "screenshots": $screenshots_count,
+            "videos": $videos_count,
+            "traces": $traces_count,
+            "logs": $logs_count,
+            "networkLogs": $network_count,
+            "consoleLogs": $console_count,
+            "domSnapshots": $dom_count
           }
           EOF
                   )
@@ -767,7 +775,6 @@ jobs:
               # Enhanced webhook and artifact info
               total_tests = len(results)
               expected_webhooks = total_tests * 3
-              debug_files = len(glob.glob('debug-artifacts/**/*', recursive=True))
               debug_files = len([f for f in glob.glob('debug-artifacts/**/*', recursive=True) if glob.os.path.isfile(f)])
               
               print(f'- 📡 **Webhooks Sent:** {expected_webhooks} (3 per test)')
@@ -779,11 +786,13 @@ jobs:
               # Framework-specific info
               metadata = data.get('metadata', {})
               if metadata.get('debugEnabled'):
-                  print(f'- 🎯 **Framework Support:** {metadata.get(\"framework\", \"auto-detect\")}')
+                  framework = metadata.get('framework', 'auto-detect')
+                  print(f'- 🎯 **Framework Support:** {framework}')
                   execution_config = metadata.get('execution', {})
                   enabled_features = [k for k, v in execution_config.items() if v]
                   if enabled_features:
-                      print(f'- ✨ **Debug Features:** {', '.join(enabled_features)}')
+                      features_str = ', '.join(enabled_features)
+                      print(f'- ✨ **Debug Features:** {features_str}')
               
           except Exception as e:
               print(f'- ❌ Error reading enhanced results: {e}')
