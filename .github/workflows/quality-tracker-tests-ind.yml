@@ -258,9 +258,23 @@ jobs:
               end_time=$(date +%s)
               duration=$((end_time - start_time))
               
-              # Get test output (truncated for JSON)
+              # Extract meaningful error message for logs
               if [ -f "$test_output_file" ]; then
-                  test_logs=$(cat "$test_output_file")
+                  if [ "$test_status" = "Failed" ]; then
+                      # Extract the main error message from pytest output
+                      error_line=$(grep -E "^E   " "$test_output_file" | head -1 | sed 's/^E   //')
+                      if [ -n "$error_line" ]; then
+                          test_logs="FAILED: $error_line"
+                      else
+                          # Fallback to short test summary
+                          summary_line=$(grep "ERROR.*$test_id" "$test_output_file" | head -1)
+                          test_logs="${summary_line:-Test failed - check full logs}"
+                      fi
+                  elif [ "$test_status" = "Not Found" ]; then
+                      test_logs="Test implementation not found for pattern: $test_id"
+                  else
+                      test_logs="Test completed successfully"
+                  fi
               else
                   test_logs="No output captured for $test_id"
               fi
