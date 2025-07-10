@@ -97,7 +97,7 @@ jobs:
           # Create test results directory
           mkdir -p test-results
           
-          # ✅ OPTIMIZED: Single webhook function - no duplicates, one User-Agent
+          # ✅ OPTIMIZED: Single webhook function - now with comprehensive failure data
           send_webhook() {
               local test_id="$1"
               local status="$2"
@@ -108,8 +108,61 @@ jobs:
                   # Clean and escape logs for JSON
                   local escaped_logs=$(echo "$test_logs" | head -20 | tr '\n' ' ' | sed 's/"/\\"/g' | cut -c1-1000)
                   
-                  # Create webhook payload
-                  cat > "webhook_${test_id}_${status}.json" << EOF
+                  # Build comprehensive webhook payload
+                  if [ "$status" = "Failed" ] && [ -n "$error_type" ]; then
+                      # Enhanced payload with failure object for failed tests
+                      cat > "webhook_${test_id}_${status}.json" << EOF
+          {
+            "requestId": "$REQUEST_ID",
+            "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+            "results": [
+              {
+                "id": "$test_id",
+                "name": "Test $test_id",
+                "status": "$status",
+                "duration": $duration,
+                "logs": "$escaped_logs",
+                "failure": {
+                  "type": "$error_type",
+                  "phase": "$test_phase",
+                  "file": "$error_file",
+                  "line": ${error_line_num:-0},
+                  "method": "$test_method",
+                  "class": "$test_class",
+                  "rawError": "$(echo "$raw_error" | sed 's/"/\\"/g')",
+                  "assertion": {
+                    "available": $([ -n "$assertion_expr" ] && echo "true" || echo "false"),
+                    "expression": "$(echo "$assertion_expr" | sed 's/"/\\"/g')",
+                    "expected": "$(echo "$assertion_expected" | sed 's/"/\\"/g')",
+                    "actual": "$(echo "$assertion_actual" | sed 's/"/\\"/g')",
+                    "operator": "$assertion_operator"
+                  }
+                },
+                "execution": {
+                  "exitCode": ${exit_code:-1},
+                  "framework": "pytest",
+                  "collected": ${collected:-0},
+                  "selected": ${selected:-1},
+                  "deselected": ${deselected:-0},
+                  "pytestDuration": ${pytest_duration:-0},
+                  "setupDuration": ${setup_duration:-0},
+                  "callDuration": ${call_duration:-0},
+                  "teardownDuration": ${teardown_duration:-0}
+                },
+                "environment": {
+                  "python": "$python_version",
+                  "pytest": "$pytest_version",
+                  "platform": "$platform",
+                  "ci": "GitHub Actions",
+                  "browser": "$browser"
+                }
+              }
+            ]
+          }
+          EOF
+                  else
+                      # Simple payload for passed/not found tests
+                      cat > "webhook_${test_id}_${status}.json" << EOF
           {
             "requestId": "$REQUEST_ID",
             "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
@@ -124,6 +177,7 @@ jobs:
             ]
           }
           EOF
+                  fi
                   
                   echo "📡 Sending webhook: $test_id -> $status"
                   
