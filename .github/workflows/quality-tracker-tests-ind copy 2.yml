@@ -258,54 +258,17 @@ jobs:
               end_time=$(date +%s)
               duration=$((end_time - start_time))
               
-              # Extract comprehensive test data for pytest
+              # Extract meaningful error message for logs
               if [ -f "$test_output_file" ]; then
                   if [ "$test_status" = "Failed" ]; then
-                      # Extract main error message
+                      # Extract the main error message from pytest output
                       error_line=$(grep -E "^E   " "$test_output_file" | head -1 | sed 's/^E   //')
-                      
-                      # Extract assertion details if available
-                      assertion_expr=$(grep -E ">\s+assert " "$test_output_file" | head -1 | sed 's/>\s*assert //')
-                      
-                      # Extract expected/actual for common patterns
-                      assertion_data=""
-                      if grep -qE "E\s+assert .* == .*" "$test_output_file"; then
-                          actual=$(grep -E "E\s+assert " "$test_output_file" | head -1 | sed -E 's/E\s+assert ([^=]+) ==.*/\1/' | xargs)
-                          expected=$(grep -E "E\s+assert " "$test_output_file" | head -1 | sed -E 's/E\s+assert .* == (.*)/\1/' | xargs)
-                          assertion_data="Expected: $expected, Actual: $actual"
-                      elif grep -qE "assert .* in .*" "$test_output_file"; then
-                          assertion_data=$(grep -E "E\s+assert " "$test_output_file" | head -1 | sed 's/E\s+//')
-                      fi
-                      
-                      # Extract error type and location
-                      error_type=$(grep -E "^[A-Za-z]+\.[A-Za-z]+\.[A-Za-z]+Exception:" "$test_output_file" | head -1 | sed -E 's/.*\.([A-Za-z]+Exception):.*/\1/')
-                      error_file=$(grep -E "tests/.*\.py:[0-9]+: in " "$test_output_file" | head -1 | sed -E 's/(tests\/.*\.py:[0-9]+):.*/\1/')
-                      
-                      # Extract test phase (setup, call, teardown)
-                      test_phase="call"
-                      if grep -q "ERROR at setup" "$test_output_file"; then
-                          test_phase="setup"
-                      elif grep -q "ERROR at teardown" "$test_output_file"; then
-                          test_phase="teardown"
-                      fi
-                      
-                      # Build comprehensive error message
                       if [ -n "$error_line" ]; then
                           test_logs="FAILED: $error_line"
-                          if [ -n "$assertion_data" ]; then
-                              test_logs="$test_logs | $assertion_data"
-                          fi
-                          if [ -n "$error_type" ]; then
-                              test_logs="$test_logs | Type: $error_type"
-                          fi
-                          if [ -n "$error_file" ]; then
-                              test_logs="$test_logs | Location: $error_file"
-                          fi
-                          test_logs="$test_logs | Phase: $test_phase"
                       else
-                          # Fallback to summary line
+                          # Fallback to short test summary
                           summary_line=$(grep "ERROR.*$test_id" "$test_output_file" | head -1)
-                          test_logs="${summary_line:-Test failed - check full logs} | Phase: $test_phase"
+                          test_logs="${summary_line:-Test failed - check full logs}"
                       fi
                   elif [ "$test_status" = "Not Found" ]; then
                       test_logs="Test implementation not found for pattern: $test_id"
