@@ -175,7 +175,7 @@ jobs:
           test_id = "$test_id"
           status = "$status"
           duration = int("$duration" or "0")
-          logs = """$escaped_logs"""
+          logs = r"""$test_logs"""
           
           # Find and update the test result in consolidated results
           updated = False
