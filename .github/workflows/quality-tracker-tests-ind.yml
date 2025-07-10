@@ -102,11 +102,11 @@ jobs:
               local test_id="$1"
               local status="$2"
               local duration="$3"
-              local logs="$4"
+              local test_logs="$4"
               
               if [ -n "$CALLBACK_URL" ]; then
                   # Clean and escape logs for JSON
-                  local escaped_logs=$(echo "$logs" | head -20 | tr '\n' ' ' | sed 's/"/\\"/g' | cut -c1-1000)
+                  local escaped_logs=$(echo "$test_logs" | head -20 | tr '\n' ' ' | sed 's/"/\\"/g' | cut -c1-1000)
                   
                   # Create webhook payload
                   cat > "webhook_${test_id}_${status}.json" << EOF
