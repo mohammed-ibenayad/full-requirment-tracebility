@@ -15,10 +15,6 @@ jobs:
       GITHUB_RUN_ID: ${{ github.run_id }}
       REQUEST_ID: ${{ github.event.client_payload.requestId }}
       
-      # Minimal debug configuration - only essential fields
-      DEBUG_ENABLED: ${{ github.event.client_payload.debug.enabled || 'false' }}
-      DEBUG_FRAMEWORK: ${{ github.event.client_payload.debug.framework || 'auto-detect' }}
-      
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -43,18 +39,6 @@ jobs:
           echo "📝 Request ID: $REQUEST_ID"
           echo "📡 Callback URL: $CALLBACK_URL"
           echo "✨ OPTIMIZED: Minimal webhook delivery (3 per test case)"
-          
-          # Show debug status if enabled
-          if [ "$DEBUG_ENABLED" = "true" ]; then
-            echo "🐛 Debug mode enabled - Framework: $DEBUG_FRAMEWORK"
-          fi
-
-      - name: Create debug directory
-        run: |
-          if [ "$DEBUG_ENABLED" = "true" ]; then
-            echo "📁 Creating debug artifacts directory..."
-            mkdir -p debug-artifacts
-          fi
 
       - name: Initialize consolidated results file
         run: |
@@ -69,25 +53,17 @@ jobs:
           test_ids = os.environ.get("TEST_CASE_IDS", "").split()
           requirement_id = os.environ.get("REQUIREMENT_ID", "")
           request_id = os.environ.get("REQUEST_ID", "")
-          debug_enabled = os.environ.get("DEBUG_ENABLED", "false").lower() == "true"
           
           results = []
           for test_id in test_ids:
               if test_id.strip():
-                  test_result = {
+                  results.append({
                       "id": test_id.strip(),
                       "name": f"Test {test_id.strip()}",
                       "status": "Not Started",
                       "duration": 0,
                       "logs": "Test queued for execution"
-                  }
-                  
-                  # Add minimal debug structure if enabled
-                  if debug_enabled:
-                      test_result["debugEnabled"] = True
-                      test_result["framework"] = os.environ.get("DEBUG_FRAMEWORK", "auto-detect")
-                  
-                  results.append(test_result)
+                  })
           
           # Consolidated format for artifacts (same as original workflow)
           consolidated_payload = {
@@ -97,21 +73,11 @@ jobs:
               "results": results
           }
           
-          # Add minimal debug metadata if enabled
-          if debug_enabled:
-              consolidated_payload["debugMetadata"] = {
-                  "enabled": True,
-                  "framework": os.environ.get("DEBUG_FRAMEWORK", "auto-detect"),
-                  "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-              }
-          
           # Save consolidated results for artifact generation
           with open("current_results.json", "w") as f:
               json.dump(consolidated_payload, f, indent=2)
           
           print(f"📋 Initialized consolidated results with {len(results)} tests")
-          if debug_enabled:
-              print("🐛 Debug metadata added to results")
           EOF
           
           python initialize_results.py
@@ -131,41 +97,19 @@ jobs:
           # Create test results directory
           mkdir -p test-results
           
-          # ✅ OPTIMIZED: Single webhook function with minimal debug enhancement
+          # ✅ OPTIMIZED: Single webhook function - no duplicates, one User-Agent
           send_webhook() {
               local test_id="$1"
               local status="$2"
               local duration="$3"
               local logs="$4"
-              local error_info="$5"
               
               if [ -n "$CALLBACK_URL" ]; then
                   # Clean and escape logs for JSON
                   local escaped_logs=$(echo "$logs" | head -20 | tr '\n' ' ' | sed 's/"/\\"/g' | cut -c1-1000)
-                  local escaped_error=$(echo "$error_info" | tr '\n' ' ' | sed 's/"/\\"/g' | cut -c1-500)
                   
-                  # Create webhook payload with minimal debug info
-                  if [ "$DEBUG_ENABLED" = "true" ]; then
-                      cat > "webhook_${test_id}_${status}.json" << EOF
-          {
-            "requestId": "$REQUEST_ID",
-            "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
-            "results": [
-              {
-                "id": "$test_id",
-                "name": "Test $test_id",
-                "status": "$status",
-                "duration": $duration,
-                "logs": "$escaped_logs",
-                "error": $([ -n "$error_info" ] && echo "{ \"message\": \"$escaped_error\", \"type\": \"TestError\" }" || echo "null"),
-                "debugEnabled": true,
-                "framework": "$DEBUG_FRAMEWORK"
-              }
-            ]
-          }
-          EOF
-                  else
-                      cat > "webhook_${test_id}_${status}.json" << EOF
+                  # Create webhook payload
+                  cat > "webhook_${test_id}_${status}.json" << EOF
           {
             "requestId": "$REQUEST_ID",
             "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
@@ -180,7 +124,6 @@ jobs:
             ]
           }
           EOF
-                  fi
                   
                   echo "📡 Sending webhook: $test_id -> $status"
                   
@@ -192,7 +135,6 @@ jobs:
                     -H "X-GitHub-Run-ID: $GITHUB_RUN_ID" \
                     -H "X-Request-ID: $REQUEST_ID" \
                     -H "X-Test-Case-ID: $test_id" \
-                    -H "X-Debug-Enabled: $DEBUG_ENABLED" \
                     -d @"webhook_${test_id}_${status}.json" \
                     "$CALLBACK_URL" \
                     --max-time 30 \
@@ -211,7 +153,7 @@ jobs:
                   sleep 0.5
               fi
               
-              # ✅ KEEP: Update consolidated results file for artifacts with minimal debug enhancement
+              # ✅ KEEP: Update consolidated results file for artifacts (preserves current behavior)
               cat > update_consolidated_result.py << EOF
           import json
           import os
@@ -230,12 +172,10 @@ jobs:
               }
           
           # Update specific test result in consolidated format
-          test_id = "${test_id}"
-          status = "${status}"
-          duration = int("${duration}" if "${duration}" else "0")
-          logs = """${escaped_logs}"""
-          error_info = """${escaped_error}""" if "${escaped_error}" else None
-          debug_enabled = os.environ.get("DEBUG_ENABLED", "false").lower() == "true"
+          test_id = "$test_id"
+          status = "$status"
+          duration = int("$duration" or "0")
+          logs = """$escaped_logs"""
           
           # Find and update the test result in consolidated results
           updated = False
@@ -245,41 +185,18 @@ jobs:
                   result["duration"] = duration
                   result["logs"] = logs
                   result["name"] = f"Test {test_id}"
-                  
-                  # Add minimal debug info if enabled
-                  if debug_enabled:
-                      result["debugEnabled"] = True
-                      result["framework"] = os.environ.get("DEBUG_FRAMEWORK", "auto-detect")
-                      if error_info:
-                          result["error"] = {
-                              "message": error_info[:500],
-                              "type": "TestError"
-                          }
-                  
                   updated = True
                   break
           
           # If not found, add new result to consolidated results
           if not updated:
-              new_result = {
+              payload["results"].append({
                   "id": test_id,
                   "name": f"Test {test_id}",
                   "status": status,
                   "duration": duration,
                   "logs": logs
-              }
-              
-              # Add minimal debug info if enabled
-              if debug_enabled:
-                  new_result["debugEnabled"] = True
-                  new_result["framework"] = os.environ.get("DEBUG_FRAMEWORK", "auto-detect")
-                  if error_info:
-                      new_result["error"] = {
-                          "message": error_info[:500],
-                          "type": "TestError"
-                      }
-              
-              payload["results"].append(new_result)
+              })
           
           # Update timestamp and ensure required fields for artifacts
           payload["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -305,10 +222,10 @@ jobs:
               echo "🧪 [$CURRENT_TEST/$TOTAL_TESTS] Processing test: $test_id"
               
               # 1. Send "Not Started" status (ONCE)
-              send_webhook "$test_id" "Not Started" "0" "Test queued for execution" ""
+              send_webhook "$test_id" "Not Started" "0" "Test queued for execution"
               
               # 2. Send "Running" status (ONCE)
-              send_webhook "$test_id" "Running" "0" "Test execution in progress..." ""
+              send_webhook "$test_id" "Running" "0" "Test execution in progress..."
               
               # 3. Run the individual test with enhanced status detection
               start_time=$(date +%s)
@@ -323,7 +240,6 @@ jobs:
                   > "$test_output_file" 2>&1; then
                   
                   test_status="Passed"
-                  error_info=""
                   echo "✅ Test PASSED: $test_id"
               else
                   exit_code=$?
@@ -331,17 +247,10 @@ jobs:
                   # Check if no tests were collected (exit code 5) or "collected 0 items" in output
                   if [ $exit_code -eq 5 ] || grep -q "collected 0 items" "$test_output_file"; then
                       test_status="Not Found"
-                      error_info="Test implementation not found. Expected test file or function containing '$test_id' pattern."
                       echo "⚠️  Test implementation NOT FOUND: $test_id"
                       echo "💡 Expected test file or function containing '$test_id' pattern"
                   else
                       test_status="Failed"
-                      # Extract basic error info for debug
-                      if [ "$DEBUG_ENABLED" = "true" ]; then
-                          error_info=$(grep -A 5 "FAILED\|ERROR\|AssertionError" "$test_output_file" | head -3 | tr '\n' ' ' | cut -c1-300 || echo "Test execution failed")
-                      else
-                          error_info=""
-                      fi
                       echo "❌ Test FAILED: $test_id (exit code: $exit_code)"
                   fi
               fi
@@ -352,17 +261,12 @@ jobs:
               # Get test output (truncated for JSON)
               if [ -f "$test_output_file" ]; then
                   test_logs=$(cat "$test_output_file")
-                  
-                  # Copy log file to debug artifacts if debug is enabled
-                  if [ "$DEBUG_ENABLED" = "true" ] && [ "$test_status" = "Failed" ]; then
-                      cp "$test_output_file" "debug-artifacts/${test_id}_output.log" 2>/dev/null || true
-                  fi
               else
                   test_logs="No output captured for $test_id"
               fi
               
               # 4. Send final result (ONCE)
-              send_webhook "$test_id" "$test_status" "$duration" "$test_logs" "$error_info"
+              send_webhook "$test_id" "$test_status" "$duration" "$test_logs"
               
               echo "📊 Test completed: $test_id -> $test_status (${duration}s)"
               
@@ -372,9 +276,6 @@ jobs:
           
           echo ""
           echo "🏁 All tests completed! Expected webhooks: $((TOTAL_TESTS * 3))"
-          if [ "$DEBUG_ENABLED" = "true" ]; then
-              echo "🐛 Debug artifacts collected: $(find debug-artifacts -type f 2>/dev/null | wc -l) files"
-          fi
         continue-on-error: true
 
       - name: Generate backward compatible results
@@ -403,19 +304,16 @@ jobs:
           
           # Collect webhook files for reference
           webhook_files = glob.glob("webhook_*_*.json")
-          debug_files = glob.glob("debug-artifacts/*") if os.path.exists("debug-artifacts") else []
           
           summary = {
-              "executionMode": "optimized-minimal-webhooks-with-debug-support",
+              "executionMode": "optimized-minimal-webhooks-with-not-found-detection",
               "requestId": os.environ.get("REQUEST_ID", ""),
               "requirementId": os.environ.get("REQUIREMENT_ID", ""),
               "timestamp": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
               "webhooksSent": len(webhook_files),
               "consolidatedArtifactGenerated": os.path.exists("current_results.json"),
               "githubRunId": os.environ.get("GITHUB_RUN_ID", ""),
-              "debugEnabled": os.environ.get("DEBUG_ENABLED", "false").lower() == "true",
-              "debugArtifacts": len(debug_files),
-              "note": "Enhanced with minimal debug support and 'Not Found' status detection"
+              "note": "Enhanced with 'Not Found' status detection for missing test implementations"
           }
           
           # Read consolidated results for summary
@@ -439,19 +337,10 @@ jobs:
               summary["actualWebhooks"] = len(webhook_files)
               summary["efficiency"] = "Optimized" if len(webhook_files) <= len(results) * 3 else "Needs review"
               
-              # Add debug info if enabled
-              if summary["debugEnabled"]:
-                  summary["debugFramework"] = os.environ.get("DEBUG_FRAMEWORK", "auto-detect")
-                  summary["debugMetadata"] = consolidated_data.get("debugMetadata", {})
-              
               print(f"📋 Execution Summary:")
               print(f"  - Total Tests: {len(results)}")
               print(f"  - Expected Webhooks: {len(results) * 3}")
               print(f"  - Actual Webhooks: {len(webhook_files)}")
-              print(f"  - Debug Enabled: {summary['debugEnabled']}")
-              if summary["debugEnabled"]:
-                  print(f"  - Debug Framework: {summary['debugFramework']}")
-                  print(f"  - Debug Artifacts: {summary['debugArtifacts']}")
               print(f"  - Efficiency: {summary['efficiency']}")
               for status, count in status_counts.items():
                   print(f"  - {status}: {count}")
@@ -459,7 +348,7 @@ jobs:
           with open("execution_summary.json", "w") as f:
               json.dump(summary, f, indent=2)
           
-          print("✅ Enhanced execution summary generated with minimal debug support")
+          print("✅ Enhanced execution summary generated with 'Not Found' detection")
           EOF
           
           python generate_execution_summary.py
@@ -475,7 +364,6 @@ jobs:
             execution_summary.json
             webhook_*_*.json
             test-results/
-            debug-artifacts/
           retention-days: 7
           
       - name: Workflow Summary
@@ -485,7 +373,7 @@ jobs:
           echo "**Requirement:** $REQUIREMENT_ID - $REQUIREMENT_NAME" >> $GITHUB_STEP_SUMMARY
           echo "**Request ID:** $REQUEST_ID" >> $GITHUB_STEP_SUMMARY
           echo "**Requested Tests:** $TEST_CASE_IDS" >> $GITHUB_STEP_SUMMARY
-          echo "**Execution Mode:** ✨ **Enhanced with Minimal Debug Support** ✨" >> $GITHUB_STEP_SUMMARY
+          echo "**Execution Mode:** ✨ **Enhanced with 'Not Found' Status Detection** ✨" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [ -f current_results.json ]; then
@@ -498,8 +386,6 @@ jobs:
               
               results = data.get('results', [])
               status_counts = {}
-              debug_enabled = data.get('debugMetadata', {}).get('enabled', False)
-              
               for r in results:
                   status = r.get('status', 'Unknown')
                   status_counts[status] = status_counts.get(status, 0) + 1
@@ -524,10 +410,6 @@ jobs:
               expected_webhooks = total_tests * 3
               print(f'- 📡 **Webhooks Sent:** {expected_webhooks} (3 per test)')
               print(f'- 📦 **Consolidated Artifacts:** Generated')
-              print(f'- 🐛 **Debug Support:** {\"Enabled\" if debug_enabled else \"Disabled\"}')
-              if debug_enabled:
-                  framework = data.get('debugMetadata', {}).get('framework', 'auto-detect')
-                  print(f'- 🎯 **Framework:** {framework}')
               print(f'- ⚡ **Enhancement:** Missing test implementation detection')
               print(f'- ✅ **Status Clarity:** Clear distinction between failed vs missing tests')
           except Exception as e:
@@ -539,10 +421,9 @@ jobs:
           
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Enhancement Features:**" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Minimal Debug Support:** Optional debug mode with framework detection" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ **Enhanced Status Detection:** Distinguishes between failed tests and missing implementations" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ **'Not Found' Status:** Tests without implementations get proper status" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Error Context:** Basic error information when debug is enabled" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Debug Artifacts:** Failure logs collected when debug mode is on" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Exit Code Analysis:** Uses pytest exit code 5 to detect missing tests" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Log Pattern Detection:** Checks for 'collected 0 items' as backup detection" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Actionable Feedback:** Clear messaging about what needs to be implemented" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ **Backward Compatibility:** Same artifact structure as original workflow" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Optional Enhancement:** Debug features only activate when requested" >> $GITHUB_STEP_SUMMARY
