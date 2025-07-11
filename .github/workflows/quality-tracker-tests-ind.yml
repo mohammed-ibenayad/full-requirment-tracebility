@@ -97,79 +97,96 @@ jobs:
           # Create test results directory
           mkdir -p test-results
           
-          # ✅ FIXED: Enhanced webhook function with proper failure data extraction
+          # ✅ DIAGNOSTIC: Enhanced webhook function with detailed debugging
           send_webhook() {
               local test_id="$1"
               local status="$2"
               local duration="$3"
               local test_logs="$4"
-              local test_output_file="$5"  # Add output file parameter
+              local test_output_file="$5"
+              
+              echo "🔍 DEBUG: send_webhook called with:"
+              echo "  - test_id: $test_id"
+              echo "  - status: $status"
+              echo "  - duration: $duration"
+              echo "  - test_output_file: $test_output_file"
+              echo "  - test_logs: $test_logs"
               
               if [ -n "$CALLBACK_URL" ]; then
                   # Clean and escape logs for JSON
                   local escaped_logs=$(echo "$test_logs" | head -20 | tr '\n' ' ' | sed 's/"/\\"/g' | cut -c1-1000)
                   
-                  # FIXED: Extract failure details BEFORE building webhook payload
-                  if [ "$status" = "Failed" ] && [ -f "$test_output_file" ]; then
-                      echo "🔍 Extracting detailed failure information for $test_id..."
+                  # Debug: Check if we should extract failure details
+                  if [ "$status" = "Failed" ]; then
+                      echo "🔍 DEBUG: Status is Failed, checking for output file..."
                       
-                      # Extract comprehensive failure details
-                      local error_type=""
-                      local test_phase="call"
-                      local error_file=""
-                      local error_line_num=""
-                      local test_method=""
-                      local test_class=""
-                      local raw_error=""
-                      local assertion_expr=""
-                      local assertion_expected=""
-                      local assertion_actual=""
-                      local assertion_operator=""
-                      local exit_code="1"
-                      
-                      # Extract error type (Selenium, AssertionError, etc.)
-                      error_type=$(grep -E "^[A-Za-z_]+(\.[A-Za-z_]+)*Exception:" "$test_output_file" | head -1 | sed -E 's/.*\.([A-Za-z_]+Exception):.*/\1/')
-                      if [ -z "$error_type" ]; then
-                          error_type=$(grep -E "^[A-Za-z_]+Error:" "$test_output_file" | head -1 | sed -E 's/.*\.([A-Za-z_]+Error):.*/\1/')
-                      fi
-                      if [ -z "$error_type" ]; then
-                          error_type="TestFailure"
-                      fi
-                      
-                      # Extract test phase
-                      if grep -q "ERROR at setup" "$test_output_file"; then
-                          test_phase="setup"
-                      elif grep -q "ERROR at teardown" "$test_output_file"; then
-                          test_phase="teardown"
-                      fi
-                      
-                      # Extract file location and line number
-                      error_file=$(grep -E "tests/.*\.py:[0-9]+: in " "$test_output_file" | head -1 | sed -E 's/(tests\/[^:]+\.py):[0-9]+:.*/\1/')
-                      error_line_num=$(grep -E "tests/.*\.py:[0-9]+: in " "$test_output_file" | head -1 | sed -E 's/tests\/[^:]+\.py:([0-9]+):.*/\1/')
-                      
-                      # Extract method and class
-                      test_method=$(grep -E "tests/.*\.py:[0-9]+: in ([a-zA-Z_][a-zA-Z0-9_]*)" "$test_output_file" | head -1 | sed -E 's/.*: in ([a-zA-Z_][a-zA-Z0-9_]*).*/\1/')
-                      test_class=$(grep -E "class [A-Z][a-zA-Z0-9_]*:" "$test_output_file" | head -1 | sed -E 's/.*class ([A-Z][a-zA-Z0-9_]*).*/\1/')
-                      
-                      # Extract raw error message
-                      raw_error=$(grep -E "^E   " "$test_output_file" | head -3 | sed 's/^E   //' | tr '\n' ' ' | sed 's/"/\\"/g')
-                      
-                      # Extract assertion details for assertion errors
-                      if grep -qE "assert " "$test_output_file"; then
-                          assertion_expr=$(grep -E ">\s+assert " "$test_output_file" | head -1 | sed 's/>\s*assert //' | sed 's/"/\\"/g')
+                      if [ -f "$test_output_file" ]; then
+                          echo "✅ DEBUG: Output file exists: $test_output_file"
+                          echo "📄 DEBUG: First 10 lines of output file:"
+                          head -10 "$test_output_file"
+                          echo "📄 DEBUG: Error lines from output file:"
+                          grep -E "^E   |Exception:|Error:" "$test_output_file" | head -5
                           
-                          # Try to extract expected/actual for == assertions
-                          if echo "$assertion_expr" | grep -qE " == "; then
-                              assertion_operator="=="
-                              assertion_actual=$(echo "$assertion_expr" | sed -E 's/^([^=]+) ==.*/\1/' | xargs | sed 's/"/\\"/g')
-                              assertion_expected=$(echo "$assertion_expr" | sed -E 's/^[^=]+ == (.*)/\1/' | xargs | sed 's/"/\\"/g')
-                          elif echo "$assertion_expr" | grep -qE " in "; then
-                              assertion_operator="in"
+                          # Extract failure details
+                          echo "🔍 DEBUG: Extracting failure details..."
+                          
+                          local error_type=""
+                          local test_phase="call"
+                          local error_file=""
+                          local error_line_num=""
+                          local test_method=""
+                          local test_class=""
+                          local raw_error=""
+                          local assertion_expr=""
+                          local assertion_expected=""
+                          local assertion_actual=""
+                          local assertion_operator=""
+                          
+                          # Extract error type
+                          error_type=$(grep -E "^[A-Za-z_]+(\.[A-Za-z_]+)*Exception:" "$test_output_file" | head -1 | sed -E 's/.*\.([A-Za-z_]+Exception):.*/\1/')
+                          if [ -z "$error_type" ]; then
+                              error_type=$(grep -E "^[A-Za-z_]+Error:" "$test_output_file" | head -1 | sed -E 's/.*([A-Za-z_]+Error):.*/\1/')
                           fi
-                      fi
-                      
-                      # Build enhanced webhook payload with failure object
-                      cat > "webhook_${test_id}_${status}.json" << EOF
+                          if [ -z "$error_type" ]; then
+                              error_type="TestFailure"
+                          fi
+                          
+                          echo "🔍 DEBUG: Extracted error_type: '$error_type'"
+                          
+                          # Extract test phase
+                          if grep -q "ERROR at setup" "$test_output_file"; then
+                              test_phase="setup"
+                          elif grep -q "ERROR at teardown" "$test_output_file"; then
+                              test_phase="teardown"
+                          fi
+                          
+                          echo "🔍 DEBUG: Extracted test_phase: '$test_phase'"
+                          
+                          # Extract file location
+                          error_file=$(grep -E "tests/.*\.py:[0-9]+: in " "$test_output_file" | head -1 | sed -E 's/(tests\/[^:]+\.py):[0-9]+:.*/\1/')
+                          error_line_num=$(grep -E "tests/.*\.py:[0-9]+: in " "$test_output_file" | head -1 | sed -E 's/tests\/[^:]+\.py:([0-9]+):.*/\1/')
+                          
+                          echo "🔍 DEBUG: Extracted error_file: '$error_file'"
+                          echo "🔍 DEBUG: Extracted error_line_num: '$error_line_num'"
+                          
+                          # Extract method and class
+                          test_method=$(grep -E "tests/.*\.py:[0-9]+: in ([a-zA-Z_][a-zA-Z0-9_]*)" "$test_output_file" | head -1 | sed -E 's/.*: in ([a-zA-Z_][a-zA-Z0-9_]*).*/\1/')
+                          test_class=$(grep -E "class [A-Z][a-zA-Z0-9_]*:" "$test_output_file" | head -1 | sed -E 's/.*class ([A-Z][a-zA-Z0-9_]*).*/\1/')
+                          
+                          echo "🔍 DEBUG: Extracted test_method: '$test_method'"
+                          echo "🔍 DEBUG: Extracted test_class: '$test_class'"
+                          
+                          # Extract raw error
+                          raw_error=$(grep -E "^E   " "$test_output_file" | head -3 | sed 's/^E   //' | tr '\n' ' ' | sed 's/"/\\"/g')
+                          
+                          echo "🔍 DEBUG: Extracted raw_error: '$raw_error'"
+                          
+                          # Check if we have enough data for failure object
+                          if [ -n "$error_type" ] || [ -n "$raw_error" ]; then
+                              echo "✅ DEBUG: Creating enhanced failure object"
+                              
+                              # Build enhanced webhook payload
+                              cat > "webhook_${test_id}_${status}.json" << EOF
           {
             "requestId": "$REQUEST_ID",
             "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
@@ -189,7 +206,7 @@ jobs:
                   "class": "$test_class",
                   "rawError": "$raw_error",
                   "assertion": {
-                    "available": $([ -n "$assertion_expr" ] && echo "true" || echo "false"),
+                    "available": false,
                     "expression": "$assertion_expr",
                     "expected": "$assertion_expected",
                     "actual": "$assertion_actual",
@@ -197,7 +214,7 @@ jobs:
                   }
                 },
                 "execution": {
-                  "exitCode": $exit_code,
+                  "exitCode": 1,
                   "framework": "pytest",
                   "pytestDuration": $duration
                 }
@@ -205,15 +222,51 @@ jobs:
             ]
           }
           EOF
-                      
-                      echo "✅ Enhanced failure object created for $test_id"
-                      echo "   - Error Type: $error_type"
-                      echo "   - Phase: $test_phase"
-                      echo "   - File: $error_file:$error_line_num"
-                      echo "   - Method: $test_method"
-                      
+                              
+                              echo "✅ DEBUG: Enhanced failure object created"
+                              echo "📄 DEBUG: Webhook payload content:"
+                              cat "webhook_${test_id}_${status}.json"
+                          else
+                              echo "❌ DEBUG: No failure details extracted, using simple payload"
+                              # Simple payload for failed tests without details
+                              cat > "webhook_${test_id}_${status}.json" << EOF
+          {
+            "requestId": "$REQUEST_ID",
+            "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+            "results": [
+              {
+                "id": "$test_id",
+                "name": "Test $test_id",
+                "status": "$status",
+                "duration": $duration,
+                "logs": "$escaped_logs"
+              }
+            ]
+          }
+          EOF
+                          fi
+                      else
+                          echo "❌ DEBUG: Output file does not exist: $test_output_file"
+                          # Simple payload for failed tests without output file
+                          cat > "webhook_${test_id}_${status}.json" << EOF
+          {
+            "requestId": "$REQUEST_ID",
+            "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+            "results": [
+              {
+                "id": "$test_id",
+                "name": "Test $test_id",
+                "status": "$status",
+                "duration": $duration,
+                "logs": "$escaped_logs"
+              }
+            ]
+          }
+          EOF
+                      fi
                   else
-                      # Simple payload for passed/not found tests
+                      echo "🔍 DEBUG: Status is not Failed ($status), using simple payload"
+                      # Simple payload for non-failed tests
                       cat > "webhook_${test_id}_${status}.json" << EOF
           {
             "requestId": "$REQUEST_ID",
@@ -231,7 +284,9 @@ jobs:
           EOF
                   fi
                   
-                  echo "📡 Sending webhook: $test_id -> $status"
+                  echo "📡 DEBUG: Sending webhook: $test_id -> $status"
+                  echo "📄 DEBUG: Final webhook payload:"
+                  cat "webhook_${test_id}_${status}.json"
                   
                   # Send webhook
                   HTTP_CODE=$(curl -w "%{http_code}" -o "response_${test_id}_${status}.txt" \
@@ -247,16 +302,18 @@ jobs:
                     -s)
                   
                   if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-                    echo "✅ Webhook sent: $test_id -> $status (HTTP $HTTP_CODE)"
+                    echo "✅ DEBUG: Webhook sent successfully (HTTP $HTTP_CODE)"
                   else
-                    echo "⚠️ Webhook failed: $test_id -> $status (HTTP $HTTP_CODE)"
+                    echo "❌ DEBUG: Webhook failed (HTTP $HTTP_CODE)"
                     if [ -f "response_${test_id}_${status}.txt" ]; then
+                      echo "📄 DEBUG: Response content:"
                       cat "response_${test_id}_${status}.txt"
                     fi
                   fi
                   
-                  # Small delay between webhook calls
                   sleep 0.5
+              else
+                  echo "❌ DEBUG: No CALLBACK_URL configured"
               fi
               
               # ✅ KEEP: Update consolidated results file for artifacts (preserves current behavior)
@@ -327,11 +384,14 @@ jobs:
               echo ""
               echo "🧪 [$CURRENT_TEST/$TOTAL_TESTS] Processing test: $test_id"
               
-              # 1. Send "Not Started" status
+              # Define output file path
               test_output_file="test-results/output-${test_id}.log"
+              echo "🔍 DEBUG: Output file will be: $test_output_file"
+              
+              # 1. Send "Not Started" status
               send_webhook "$test_id" "Not Started" "0" "Test queued for execution" ""
               
-              # 2. Send "Running" status
+              # 2. Send "Running" status  
               send_webhook "$test_id" "Running" "0" "Test execution in progress..." ""
               
               # 3. Run the test and capture detailed output
@@ -357,9 +417,15 @@ jobs:
                       test_status="Failed"
                       echo "❌ Test FAILED: $test_id (exit code: $exit_code)"
                       
-                      # Show failure summary
-                      echo "🔍 Failure details:"
-                      grep -E "^E   |^>   |FAILED|ERROR" "$test_output_file" | head -5
+                      echo "🔍 DEBUG: Test failed, output file should contain error details"
+                      echo "📄 DEBUG: Checking if output file exists and has content:"
+                      if [ -f "$test_output_file" ]; then
+                          echo "✅ Output file exists, size: $(wc -c < "$test_output_file") bytes"
+                          echo "📄 First few lines:"
+                          head -5 "$test_output_file"
+                      else
+                          echo "❌ Output file does not exist!"
+                      fi
                   fi
               fi
               
@@ -377,7 +443,8 @@ jobs:
                   test_logs="Test completed successfully"
               fi
               
-              # 4. Send final result with output file for enhanced failure details
+              # 4. Send final result - CRITICAL: Pass the output file
+              echo "🔍 DEBUG: About to send final webhook with output file: $test_output_file"
               send_webhook "$test_id" "$test_status" "$duration" "$test_logs" "$test_output_file"
               
               echo "📊 Test completed: $test_id -> $test_status (${duration}s)"
