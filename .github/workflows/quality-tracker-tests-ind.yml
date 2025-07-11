@@ -98,35 +98,86 @@ jobs:
           mkdir -p test-results
           
           # ✅ OPTIMIZED: Single webhook function - enhanced with additional data while keeping original structure
-          # MODIFIED: Added failure_data_json parameter
           send_webhook() {
               local test_id="$1"
               local status="$2"
               local duration="$3"
               local test_logs="$4"
-              local failure_data_json="$5" # New parameter for structured failure data
               
               if [ -n "$CALLBACK_URL" ]; then
                   # Clean and escape logs for JSON
                   local escaped_logs=$(echo "$test_logs" | head -20 | tr '\n' ' ' | sed 's/"/\\"/g' | cut -c1-1000)
                   
-                  # MODIFIED: Dynamically build the payload to inject failure data using jq
-                  local payload_content='{"id": "'"$test_id"'", "name": "Test '"$test_id"'", "status": "'"$status"'", "duration": '$duration', "logs": "'"$escaped_logs"'"}'
-                  
-                  if [ "$status" = "Failed" ] && [ -n "$failure_data_json" ] && [ "$failure_data_json" != "{}" ]; then
-                      # Inject failure, execution, and environment data into the payload
-                      payload_content=$(echo "$payload_content" | jq --argjson data "$failure_data_json" '. + $data')
-                  fi
-
-                  cat > "webhook_${test_id}_${status}.json" << EOF
+                  # Build enhanced webhook payload - keeping original structure + adding new fields
+                  if [ "$status" = "Failed" ] && [ -n "$error_type" ]; then
+                      # Enhanced payload with failure object for failed tests
+                      cat > "webhook_${test_id}_${status}.json" << EOF
           {
             "requestId": "$REQUEST_ID",
             "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
             "results": [
-              $payload_content
+              {
+                "id": "$test_id",
+                "name": "Test $test_id",
+                "status": "$status",
+                "duration": $duration,
+                "logs": "$escaped_logs",
+                "failure": {
+                  "type": "$error_type",
+                  "phase": "$test_phase",
+                  "file": "$error_file",
+                  "line": ${error_line_num:-0},
+                  "method": "$test_method",
+                  "class": "$test_class",
+                  "rawError": "$(echo "$raw_error" | sed 's/"/\\"/g')",
+                  "assertion": {
+                    "available": $([ -n "$assertion_expr" ] && echo "true" || echo "false"),
+                    "expression": "$(echo "$assertion_expr" | sed 's/"/\\"/g')",
+                    "expected": "$(echo "$assertion_expected" | sed 's/"/\\"/g')",
+                    "actual": "$(echo "$assertion_actual" | sed 's/"/\\"/g')",
+                    "operator": "$assertion_operator"
+                  }
+                },
+                "execution": {
+                  "exitCode": ${exit_code:-1},
+                  "framework": "pytest",
+                  "collected": ${collected:-0},
+                  "selected": ${selected:-1},
+                  "deselected": ${deselected:-0},
+                  "pytestDuration": ${pytest_duration:-0},
+                  "setupDuration": ${setup_duration:-0},
+                  "callDuration": ${call_duration:-0},
+                  "teardownDuration": ${teardown_duration:-0}
+                },
+                "environment": {
+                  "python": "$python_version",
+                  "pytest": "$pytest_version",
+                  "platform": "$platform",
+                  "ci": "GitHub Actions",
+                  "browser": "$browser"
+                }
+              }
             ]
           }
           EOF
+                  else
+                      # Simple payload for passed/not found tests - original structure preserved
+                      cat > "webhook_${test_id}_${status}.json" << EOF
+          {
+            "requestId": "$REQUEST_ID",
+            "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+            "results": [
+              {
+                "id": "$test_id",
+                "name": "Test $test_id",
+                "status": "$status",
+                "duration": $duration,
+                "logs": "$escaped_logs"
+              }
+            ]
+          }
+          EOF
+                  fi
                   
                   echo "📡 Sending webhook: $test_id -> $status"
                   
@@ -216,221 +267,116 @@ jobs:
               python update_consolidated_result.py
           }
           
-          # MODIFIED: Python script to parse pytest-json-report for detailed failure data
-          cat > parse_json_report.py << 'EOF'
-import json
-import sys
-import os
-
-def parse_failure_details(json_report_path, test_id_filter=None):
-    try:
-        with open(json_report_path, 'r') as f:
-            report_data = json.load(f)
-
-        test_case_results = report_data.get('tests', [])
-        
-        # Find the specific test case result
-        test_result = None
-        for tr in test_case_results:
-            # Check against test_id and potentially nodeid
-            if test_id_filter and (tr.get('id') == test_id_filter or test_id_filter in tr.get('nodeid', '')):
-                test_result = tr
-                break
-        if not test_result and test_case_results: # Fallback to first if no filter or not found
-            test_result = test_case_results[0]
-            
-        if not test_result:
-            return {}
-
-        failure_data = {}
-        # Prioritize call outcome, then setup, then teardown
-        outcome_section = None
-        if 'call' in test_result and test_result['call'].get('outcome') == 'failed':
-            outcome_section = test_result['call']
-            failure_data['phase'] = 'call'
-        elif 'setup' in test_result and test_result['setup'].get('outcome') == 'failed':
-            outcome_section = test_result['setup']
-            failure_data['phase'] = 'setup'
-        elif 'teardown' in test_result and test_result['teardown'].get('outcome') == 'failed':
-            outcome_section = test_result['teardown']
-            failure_data['phase'] = 'teardown'
-
-        if outcome_section:
-            longrepr = outcome_section.get('longrepr', {})
-            failure_data['type'] = longrepr.get('errortype') or 'UnknownError'
-            failure_data['rawError'] = longrepr.get('reprcrash', {}).get('message')
-            
-            # Extract file, line, method, class from nodeid or crash
-            nodeid = test_result.get('nodeid', '')
-            if nodeid:
-                parts = nodeid.split('::')
-                if len(parts) >= 1: failure_data['file'] = parts[0]
-                if len(parts) >= 2: failure_data['class'] = parts[1]
-                if len(parts) >= 3: failure_data['method'] = parts[2]
-            
-            # If line not found in nodeid, try longrepr
-            if 'line' not in failure_data and longrepr.get('reprcrash', {}).get('lineno') is not None:
-                failure_data['line'] = longrepr['reprcrash']['lineno']
-
-            # Assertion details
-            assertion_data = {"available": False}
-            if longrepr.get('sections'):
-                for section in longrepr['sections']:
-                    if section.get('name') == 'longrepr' and 'content' in section:
-                        for line in section['content'].splitlines():
-                            if 'assert' in line:
-                                assertion_data['available'] = True
-                                assertion_data['expression'] = line.strip()
-                                # Basic extraction for equality assertions
-                                if '==' in line:
-                                    try:
-                                        parts = line.split('==')
-                                        assertion_data['actual'] = parts[0].strip().split('assert ')[-1]
-                                        assertion_data['expected'] = parts[1].strip()
-                                        assertion_data['operator'] = '=='
-                                    except: pass # Ignore if parsing fails
-                                break
-            failure_data['assertion'] = assertion_data
-            
-        execution_data = {
-            "exitCode": report_data.get('exitcode', 1),
-            "framework": "pytest",
-            "collected": report_data.get('collected', 0),
-            "selected": report_data.get('passed', 0) + report_data.get('failed', 0) + report_data.get('skipped', 0) + report_data.get('xfailed', 0) + report_data.get('xpassed', 0) + report_data.get('errors', 0) , # More accurate selected
-            "deselected": report_data.get('deselected', 0),
-            "pytestDuration": report_data.get('duration', 0),
-            "setupDuration": test_result.get('setup', {}).get('duration', 0),
-            "callDuration": test_result.get('call', {}).get('duration', 0),
-            "teardownDuration": test_result.get('teardown', {}).get('duration', 0)
-        }
-
-        environment_data = report_data.get('_metadata', {})
-        # Extract specific environment details
-        env_python = environment_data.get('python', {})
-        env_pytest = environment_data.get('pytest', {})
-        env_platform = environment_data.get('platform', {})
-
-        env_details = {
-            "python": env_python.get('version', 'unknown'),
-            "pytest": env_pytest.get('version', 'unknown'),
-            "platform": env_platform.get('platform', 'unknown'),
-            "ci": "GitHub Actions",
-            "browser": os.environ.get("BROWSER_USED", "Not Specified") # Add a way to pass browser info if needed
-        }
-
-        return {
-            "failure": failure_data,
-            "execution": execution_data,
-            "environment": env_details
-        }
-
-    except FileNotFoundError:
-        print(f"Error: JSON report not found at {json_report_path}", file=sys.stderr)
-        return {}
-    except json.JSONDecodeError:
-        print(f"Error: Invalid JSON in report at {json_report_path}", file=sys.stderr)
-        return {}
-    except Exception as e:
-        print(f"Error parsing JSON report: {e}", file=sys.stderr)
-        return {}
-
-if __name__ == "__main__":
-    report_path = sys.argv[1]
-    test_id_filter = sys.argv[2] if len(sys.argv) > 2 else None
-    details = parse_failure_details(report_path, test_id_filter)
-    if details:
-        print(json.dumps(details))
-    else:
-        # If no valid details, print an empty JSON object
-        print("{}", file=sys.stderr)
-EOF
-          
           # ✅ OPTIMIZED: Process each test with exactly 3 webhook calls
           for test_id in "${TEST_ARRAY[@]}"; do
-            if [ -z "$test_id" ]; then continue; fi
-            
-            CURRENT_TEST=$((CURRENT_TEST + 1))
-            echo ""
-            echo "🧪 [$CURRENT_TEST/$TOTAL_TESTS] Processing test: $test_id"
-            
-            # 1. Send "Not Started" status (ONCE)
-            send_webhook "$test_id" "Not Started" "0" "Test queued for execution" "{}" # Empty failure data initially
-            
-            # 2. Send "Running" status (ONCE)
-            send_webhook "$test_id" "Running" "0" "Test execution in progress..." "{}" # Empty failure data initially
-            
-            # 3. Run the individual test with enhanced status detection
-            start_time=$(date +%s)
-            test_output_file="test-results/output-${test_id}.log"
-            json_report_file="test-results/json-${test_id}.json" # Define json report file path
-            
-            echo "▶️  Executing: python -m pytest -v -k \"$test_id\" --tb=short"
-            
-            # ENHANCED: Capture exit code and detect missing test implementations
-            # MODIFIED: Ensure pytest-json-report is always generated
-            if python -m pytest -v -k "$test_id" --tb=short \
-                --junit-xml="test-results/junit-${test_id}.xml" \
-                --json-report --json-report-file="$json_report_file" \
-                > "$test_output_file" 2>&1; then
-                
-                test_status="Passed"
-                echo "✅ Test PASSED: $test_id"
-            else
-                exit_code=$?
-                
-                # Check if no tests were collected (exit code 5) or "collected 0 items" in output
-                if [ $exit_code -eq 5 ] || grep -q "collected 0 items" "$test_output_file"; then
-                    test_status="Not Found"
-                    echo "⚠️  Test implementation NOT FOUND: $test_id"
-                    echo "💡 Expected test file or function containing '$test_id' pattern"
-                else
-                    test_status="Failed"
-                    echo "❌ Test FAILED: $test_id (exit code: $exit_code)"
-                fi
-            fi
-            
-            end_time=$(date +%s)
-            duration=$((end_time - start_time))
-            
-            # MODIFIED: Extract comprehensive test data using the new Python script
-            test_logs_for_webhook="Test completed successfully." # Default success message
-            failure_details_json="{}" # Default empty JSON for failure details
-
-            if [ "$test_status" = "Failed" ]; then
-                if [ -f "$json_report_file" ]; then
-                    echo "📝 Extracting detailed failure data from JSON report for $test_id..."
-                    # Pass test_id as filter to the Python script
-                    extracted_details=$(python parse_json_report.py "$json_report_file" "$test_id")
-                    
-                    if [ -n "$extracted_details" ] && [ "$extracted_details" != "{}" ]; then
-                        failure_details_json="$extracted_details"
-                        # Attempt to get a more specific log message from the extracted data
-                        extracted_raw_error=$(echo "$extracted_details" | jq -r '.failure.rawError // ""')
-                        if [ -n "$extracted_raw_error" ]; then
-                            test_logs_for_webhook="FAILED: $extracted_raw_error"
-                        fi
-                    else
-                        echo "⚠️ No structured failure details found in JSON report for $test_id, falling back to log file."
-                        test_logs_for_webhook="FAILED: $(head -n 20 "$test_output_file" | tr '\n' ' ' | sed 's/"/\\"/g' | cut -c1-1000)"
-                    fi
-                else
-                    echo "❌ JSON report not found for $test_id, falling back to log file."
-                    test_logs_for_webhook="FAILED: $(head -n 20 "$test_output_file" | tr '\n' ' ' | sed 's/"/\\"/g' | cut -c1-1000)"
-                fi
-            elif [ "$test_status" = "Not Found" ]; then
-                test_logs_for_webhook="Test implementation not found for pattern: $test_id"
-            else # Passed
-                test_logs_for_webhook="Test completed successfully."
-            fi
-            
-            # 4. Send final result (ONCE)
-            # MODIFIED: Pass the collected failure_details_json as the 5th argument
-            send_webhook "$test_id" "$test_status" "$duration" "$test_logs_for_webhook" "$failure_details_json"
-            
-            echo "📊 Test completed: $test_id -> $test_status (${duration}s)"
-            
-            # Small delay to make progress visible
-            sleep 1
+              if [ -z "$test_id" ]; then continue; fi
+              
+              CURRENT_TEST=$((CURRENT_TEST + 1))
+              echo ""
+              echo "🧪 [$CURRENT_TEST/$TOTAL_TESTS] Processing test: $test_id"
+              
+              # 1. Send "Not Started" status (ONCE)
+              send_webhook "$test_id" "Not Started" "0" "Test queued for execution"
+              
+              # 2. Send "Running" status (ONCE)
+              send_webhook "$test_id" "Running" "0" "Test execution in progress..."
+              
+              # 3. Run the individual test with enhanced status detection
+              start_time=$(date +%s)
+              test_output_file="test-results/output-${test_id}.log"
+              
+              echo "▶️  Executing: python -m pytest -v -k \"$test_id\" --tb=short"
+              
+              # ENHANCED: Capture exit code and detect missing test implementations
+              if python -m pytest -v -k "$test_id" --tb=short \
+                  --junit-xml="test-results/junit-${test_id}.xml" \
+                  --json-report --json-report-file="test-results/json-${test_id}.json" \
+                  > "$test_output_file" 2>&1; then
+                  
+                  test_status="Passed"
+                  echo "✅ Test PASSED: $test_id"
+              else
+                  exit_code=$?
+                  
+                  # Check if no tests were collected (exit code 5) or "collected 0 items" in output
+                  if [ $exit_code -eq 5 ] || grep -q "collected 0 items" "$test_output_file"; then
+                      test_status="Not Found"
+                      echo "⚠️  Test implementation NOT FOUND: $test_id"
+                      echo "💡 Expected test file or function containing '$test_id' pattern"
+                  else
+                      test_status="Failed"
+                      echo "❌ Test FAILED: $test_id (exit code: $exit_code)"
+                  fi
+              fi
+              
+              end_time=$(date +%s)
+              duration=$((end_time - start_time))
+              
+              # Extract comprehensive test data for pytest
+              if [ -f "$test_output_file" ]; then
+                  if [ "$test_status" = "Failed" ]; then
+                      # Extract main error message
+                      error_line=$(grep -E "^E   " "$test_output_file" | head -1 | sed 's/^E   //')
+                      
+                      # Extract assertion details if available
+                      assertion_expr=$(grep -E ">\s+assert " "$test_output_file" | head -1 | sed 's/>\s*assert //')
+                      
+                      # Extract expected/actual for common patterns
+                      assertion_data=""
+                      if grep -qE "E\s+assert .* == .*" "$test_output_file"; then
+                          actual=$(grep -E "E\s+assert " "$test_output_file" | head -1 | sed -E 's/E\s+assert ([^=]+) ==.*/\1/' | xargs)
+                          expected=$(grep -E "E\s+assert " "$test_output_file" | head -1 | sed -E 's/E\s+assert .* == (.*)/\1/' | xargs)
+                          assertion_data="Expected: $expected, Actual: $actual"
+                      elif grep -qE "assert .* in .*" "$test_output_file"; then
+                          assertion_data=$(grep -E "E\s+assert " "$test_output_file" | head -1 | sed 's/E\s+//')
+                      fi
+                      
+                      # Extract error type and location
+                      error_type=$(grep -E "^[A-Za-z]+\.[A-Za-z]+\.[A-Za-z]+Exception:" "$test_output_file" | head -1 | sed -E 's/.*\.([A-Za-z]+Exception):.*/\1/')
+                      error_file=$(grep -E "tests/.*\.py:[0-9]+: in " "$test_output_file" | head -1 | sed -E 's/(tests\/.*\.py:[0-9]+):.*/\1/')
+                      
+                      # Extract test phase (setup, call, teardown)
+                      test_phase="call"
+                      if grep -q "ERROR at setup" "$test_output_file"; then
+                          test_phase="setup"
+                      elif grep -q "ERROR at teardown" "$test_output_file"; then
+                          test_phase="teardown"
+                      fi
+                      
+                      # Build comprehensive error message
+                      if [ -n "$error_line" ]; then
+                          test_logs="FAILED: $error_line"
+                          if [ -n "$assertion_data" ]; then
+                              test_logs="$test_logs | $assertion_data"
+                          fi
+                          if [ -n "$error_type" ]; then
+                              test_logs="$test_logs | Type: $error_type"
+                          fi
+                          if [ -n "$error_file" ]; then
+                              test_logs="$test_logs | Location: $error_file"
+                          fi
+                          test_logs="$test_logs | Phase: $test_phase"
+                      else
+                          # Fallback to summary line
+                          summary_line=$(grep "ERROR.*$test_id" "$test_output_file" | head -1)
+                          test_logs="${summary_line:-Test failed - check full logs} | Phase: $test_phase"
+                      fi
+                  elif [ "$test_status" = "Not Found" ]; then
+                      test_logs="Test implementation not found for pattern: $test_id"
+                  else
+                      test_logs="Test completed successfully"
+                  fi
+              else
+                  test_logs="No output captured for $test_id"
+              fi
+              
+              # 4. Send final result (ONCE)
+              send_webhook "$test_id" "$test_status" "$duration" "$test_logs"
+              
+              echo "📊 Test completed: $test_id -> $test_status (${duration}s)"
+              
+              # Small delay to make progress visible
+              sleep 1
           done
           
           echo ""
@@ -497,12 +443,12 @@ EOF
               summary["efficiency"] = "Optimized" if len(webhook_files) <= len(results) * 3 else "Needs review"
               
               print(f"📋 Execution Summary:")
-              print(f"  - Total Tests: {len(results)}")
-              print(f"  - Expected Webhooks: {len(results) * 3}")
-              print(f"  - Actual Webhooks: {len(webhook_files)}")
-              print(f"  - Efficiency: {summary['efficiency']}")
+              print(f"  - Total Tests: {len(results)}")
+              print(f"  - Expected Webhooks: {len(results) * 3}")
+              print(f"  - Actual Webhooks: {len(webhook_files)}")
+              print(f"  - Efficiency: {summary['efficiency']}")
               for status, count in status_counts.items():
-                  print(f"  - {status}: {count}")
+                  print(f"  - {status}: {count}")
           
           with open("execution_summary.json", "w") as f:
               json.dump(summary, f, indent=2)
@@ -518,7 +464,7 @@ EOF
           
           # 🗑️ CLEANUP: Remove temporary webhook files after successful execution
           echo "🧹 Cleaning up temporary files..."
-          rm -f webhook_*_*.json response_*_*.txt update_consolidated_result.py generate_execution_summary.py initialize_results.py parse_json_report.py
+          rm -f webhook_*_*.json response_*_*.txt update_consolidated_result.py generate_execution_summary.py initialize_results.py
           echo "✅ Temporary files cleaned up"
 
       - name: Upload test artifacts
