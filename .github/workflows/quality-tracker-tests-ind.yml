@@ -97,20 +97,78 @@ jobs:
           # Create test results directory
           mkdir -p test-results
           
-          # ✅ OPTIMIZED: Single webhook function - enhanced with additional data while keeping original structure
+          # ✅ FIXED: Enhanced webhook function with proper failure data extraction
           send_webhook() {
               local test_id="$1"
               local status="$2"
               local duration="$3"
               local test_logs="$4"
+              local test_output_file="$5"  # Add output file parameter
               
               if [ -n "$CALLBACK_URL" ]; then
                   # Clean and escape logs for JSON
                   local escaped_logs=$(echo "$test_logs" | head -20 | tr '\n' ' ' | sed 's/"/\\"/g' | cut -c1-1000)
                   
-                  # Build enhanced webhook payload - keeping original structure + adding new fields
-                  if [ "$status" = "Failed" ] && [ -n "$error_type" ]; then
-                      # Enhanced payload with failure object for failed tests
+                  # FIXED: Extract failure details BEFORE building webhook payload
+                  if [ "$status" = "Failed" ] && [ -f "$test_output_file" ]; then
+                      echo "🔍 Extracting detailed failure information for $test_id..."
+                      
+                      # Extract comprehensive failure details
+                      local error_type=""
+                      local test_phase="call"
+                      local error_file=""
+                      local error_line_num=""
+                      local test_method=""
+                      local test_class=""
+                      local raw_error=""
+                      local assertion_expr=""
+                      local assertion_expected=""
+                      local assertion_actual=""
+                      local assertion_operator=""
+                      local exit_code="1"
+                      
+                      # Extract error type (Selenium, AssertionError, etc.)
+                      error_type=$(grep -E "^[A-Za-z_]+(\.[A-Za-z_]+)*Exception:" "$test_output_file" | head -1 | sed -E 's/.*\.([A-Za-z_]+Exception):.*/\1/')
+                      if [ -z "$error_type" ]; then
+                          error_type=$(grep -E "^[A-Za-z_]+Error:" "$test_output_file" | head -1 | sed -E 's/.*\.([A-Za-z_]+Error):.*/\1/')
+                      fi
+                      if [ -z "$error_type" ]; then
+                          error_type="TestFailure"
+                      fi
+                      
+                      # Extract test phase
+                      if grep -q "ERROR at setup" "$test_output_file"; then
+                          test_phase="setup"
+                      elif grep -q "ERROR at teardown" "$test_output_file"; then
+                          test_phase="teardown"
+                      fi
+                      
+                      # Extract file location and line number
+                      error_file=$(grep -E "tests/.*\.py:[0-9]+: in " "$test_output_file" | head -1 | sed -E 's/(tests\/[^:]+\.py):[0-9]+:.*/\1/')
+                      error_line_num=$(grep -E "tests/.*\.py:[0-9]+: in " "$test_output_file" | head -1 | sed -E 's/tests\/[^:]+\.py:([0-9]+):.*/\1/')
+                      
+                      # Extract method and class
+                      test_method=$(grep -E "tests/.*\.py:[0-9]+: in ([a-zA-Z_][a-zA-Z0-9_]*)" "$test_output_file" | head -1 | sed -E 's/.*: in ([a-zA-Z_][a-zA-Z0-9_]*).*/\1/')
+                      test_class=$(grep -E "class [A-Z][a-zA-Z0-9_]*:" "$test_output_file" | head -1 | sed -E 's/.*class ([A-Z][a-zA-Z0-9_]*).*/\1/')
+                      
+                      # Extract raw error message
+                      raw_error=$(grep -E "^E   " "$test_output_file" | head -3 | sed 's/^E   //' | tr '\n' ' ' | sed 's/"/\\"/g')
+                      
+                      # Extract assertion details for assertion errors
+                      if grep -qE "assert " "$test_output_file"; then
+                          assertion_expr=$(grep -E ">\s+assert " "$test_output_file" | head -1 | sed 's/>\s*assert //' | sed 's/"/\\"/g')
+                          
+                          # Try to extract expected/actual for == assertions
+                          if echo "$assertion_expr" | grep -qE " == "; then
+                              assertion_operator="=="
+                              assertion_actual=$(echo "$assertion_expr" | sed -E 's/^([^=]+) ==.*/\1/' | xargs | sed 's/"/\\"/g')
+                              assertion_expected=$(echo "$assertion_expr" | sed -E 's/^[^=]+ == (.*)/\1/' | xargs | sed 's/"/\\"/g')
+                          elif echo "$assertion_expr" | grep -qE " in "; then
+                              assertion_operator="in"
+                          fi
+                      fi
+                      
+                      # Build enhanced webhook payload with failure object
                       cat > "webhook_${test_id}_${status}.json" << EOF
           {
             "requestId": "$REQUEST_ID",
@@ -129,39 +187,33 @@ jobs:
                   "line": ${error_line_num:-0},
                   "method": "$test_method",
                   "class": "$test_class",
-                  "rawError": "$(echo "$raw_error" | sed 's/"/\\"/g')",
+                  "rawError": "$raw_error",
                   "assertion": {
                     "available": $([ -n "$assertion_expr" ] && echo "true" || echo "false"),
-                    "expression": "$(echo "$assertion_expr" | sed 's/"/\\"/g')",
-                    "expected": "$(echo "$assertion_expected" | sed 's/"/\\"/g')",
-                    "actual": "$(echo "$assertion_actual" | sed 's/"/\\"/g')",
+                    "expression": "$assertion_expr",
+                    "expected": "$assertion_expected",
+                    "actual": "$assertion_actual",
                     "operator": "$assertion_operator"
                   }
                 },
                 "execution": {
-                  "exitCode": ${exit_code:-1},
+                  "exitCode": $exit_code,
                   "framework": "pytest",
-                  "collected": ${collected:-0},
-                  "selected": ${selected:-1},
-                  "deselected": ${deselected:-0},
-                  "pytestDuration": ${pytest_duration:-0},
-                  "setupDuration": ${setup_duration:-0},
-                  "callDuration": ${call_duration:-0},
-                  "teardownDuration": ${teardown_duration:-0}
-                },
-                "environment": {
-                  "python": "$python_version",
-                  "pytest": "$pytest_version",
-                  "platform": "$platform",
-                  "ci": "GitHub Actions",
-                  "browser": "$browser"
+                  "pytestDuration": $duration
                 }
               }
             ]
           }
           EOF
+                      
+                      echo "✅ Enhanced failure object created for $test_id"
+                      echo "   - Error Type: $error_type"
+                      echo "   - Phase: $test_phase"
+                      echo "   - File: $error_file:$error_line_num"
+                      echo "   - Method: $test_method"
+                      
                   else
-                      # Simple payload for passed/not found tests - original structure preserved
+                      # Simple payload for passed/not found tests
                       cat > "webhook_${test_id}_${status}.json" << EOF
           {
             "requestId": "$REQUEST_ID",
@@ -181,7 +233,7 @@ jobs:
                   
                   echo "📡 Sending webhook: $test_id -> $status"
                   
-                  # ✅ SINGLE webhook call with consistent User-Agent (no retries to avoid duplicates)
+                  # Send webhook
                   HTTP_CODE=$(curl -w "%{http_code}" -o "response_${test_id}_${status}.txt" \
                     -X POST \
                     -H "Content-Type: application/json" \
@@ -267,7 +319,7 @@ jobs:
               python update_consolidated_result.py
           }
           
-          # ✅ OPTIMIZED: Process each test with exactly 3 webhook calls
+          # ✅ FIXED: Process each test with exactly 3 webhook calls
           for test_id in "${TEST_ARRAY[@]}"; do
               if [ -z "$test_id" ]; then continue; fi
               
@@ -275,20 +327,20 @@ jobs:
               echo ""
               echo "🧪 [$CURRENT_TEST/$TOTAL_TESTS] Processing test: $test_id"
               
-              # 1. Send "Not Started" status (ONCE)
-              send_webhook "$test_id" "Not Started" "0" "Test queued for execution"
-              
-              # 2. Send "Running" status (ONCE)
-              send_webhook "$test_id" "Running" "0" "Test execution in progress..."
-              
-              # 3. Run the individual test with enhanced status detection
-              start_time=$(date +%s)
+              # 1. Send "Not Started" status
               test_output_file="test-results/output-${test_id}.log"
+              send_webhook "$test_id" "Not Started" "0" "Test queued for execution" ""
               
-              echo "▶️  Executing: python -m pytest -v -k \"$test_id\" --tb=short"
+              # 2. Send "Running" status
+              send_webhook "$test_id" "Running" "0" "Test execution in progress..." ""
               
-              # ENHANCED: Capture exit code and detect missing test implementations
-              if python -m pytest -v -k "$test_id" --tb=short \
+              # 3. Run the test and capture detailed output
+              start_time=$(date +%s)
+              
+              echo "▶️  Executing: python -m pytest -v -k \"$test_id\" --tb=long"
+              
+              # IMPORTANT: Use --tb=long for more detailed error information
+              if python -m pytest -v -k "$test_id" --tb=long \
                   --junit-xml="test-results/junit-${test_id}.xml" \
                   --json-report --json-report-file="test-results/json-${test_id}.json" \
                   > "$test_output_file" 2>&1; then
@@ -298,84 +350,37 @@ jobs:
               else
                   exit_code=$?
                   
-                  # Check if no tests were collected (exit code 5) or "collected 0 items" in output
                   if [ $exit_code -eq 5 ] || grep -q "collected 0 items" "$test_output_file"; then
                       test_status="Not Found"
                       echo "⚠️  Test implementation NOT FOUND: $test_id"
-                      echo "💡 Expected test file or function containing '$test_id' pattern"
                   else
                       test_status="Failed"
                       echo "❌ Test FAILED: $test_id (exit code: $exit_code)"
+                      
+                      # Show failure summary
+                      echo "🔍 Failure details:"
+                      grep -E "^E   |^>   |FAILED|ERROR" "$test_output_file" | head -5
                   fi
               fi
               
               end_time=$(date +%s)
               duration=$((end_time - start_time))
               
-              # Extract comprehensive test data for pytest
-              if [ -f "$test_output_file" ]; then
-                  if [ "$test_status" = "Failed" ]; then
-                      # Extract main error message
-                      error_line=$(grep -E "^E   " "$test_output_file" | head -1 | sed 's/^E   //')
-                      
-                      # Extract assertion details if available
-                      assertion_expr=$(grep -E ">\s+assert " "$test_output_file" | head -1 | sed 's/>\s*assert //')
-                      
-                      # Extract expected/actual for common patterns
-                      assertion_data=""
-                      if grep -qE "E\s+assert .* == .*" "$test_output_file"; then
-                          actual=$(grep -E "E\s+assert " "$test_output_file" | head -1 | sed -E 's/E\s+assert ([^=]+) ==.*/\1/' | xargs)
-                          expected=$(grep -E "E\s+assert " "$test_output_file" | head -1 | sed -E 's/E\s+assert .* == (.*)/\1/' | xargs)
-                          assertion_data="Expected: $expected, Actual: $actual"
-                      elif grep -qE "assert .* in .*" "$test_output_file"; then
-                          assertion_data=$(grep -E "E\s+assert " "$test_output_file" | head -1 | sed 's/E\s+//')
-                      fi
-                      
-                      # Extract error type and location
-                      error_type=$(grep -E "^[A-Za-z]+\.[A-Za-z]+\.[A-Za-z]+Exception:" "$test_output_file" | head -1 | sed -E 's/.*\.([A-Za-z]+Exception):.*/\1/')
-                      error_file=$(grep -E "tests/.*\.py:[0-9]+: in " "$test_output_file" | head -1 | sed -E 's/(tests\/.*\.py:[0-9]+):.*/\1/')
-                      
-                      # Extract test phase (setup, call, teardown)
-                      test_phase="call"
-                      if grep -q "ERROR at setup" "$test_output_file"; then
-                          test_phase="setup"
-                      elif grep -q "ERROR at teardown" "$test_output_file"; then
-                          test_phase="teardown"
-                      fi
-                      
-                      # Build comprehensive error message
-                      if [ -n "$error_line" ]; then
-                          test_logs="FAILED: $error_line"
-                          if [ -n "$assertion_data" ]; then
-                              test_logs="$test_logs | $assertion_data"
-                          fi
-                          if [ -n "$error_type" ]; then
-                              test_logs="$test_logs | Type: $error_type"
-                          fi
-                          if [ -n "$error_file" ]; then
-                              test_logs="$test_logs | Location: $error_file"
-                          fi
-                          test_logs="$test_logs | Phase: $test_phase"
-                      else
-                          # Fallback to summary line
-                          summary_line=$(grep "ERROR.*$test_id" "$test_output_file" | head -1)
-                          test_logs="${summary_line:-Test failed - check full logs} | Phase: $test_phase"
-                      fi
-                  elif [ "$test_status" = "Not Found" ]; then
-                      test_logs="Test implementation not found for pattern: $test_id"
-                  else
-                      test_logs="Test completed successfully"
-                  fi
+              # Build test logs based on status
+              if [ "$test_status" = "Failed" ]; then
+                  # Extract key error information for logs
+                  error_summary=$(grep -E "^E   " "$test_output_file" | head -1 | sed 's/^E   //')
+                  test_logs="FAILED: ${error_summary:-Test execution failed}"
+              elif [ "$test_status" = "Not Found" ]; then
+                  test_logs="Test implementation not found for pattern: $test_id"
               else
-                  test_logs="No output captured for $test_id"
+                  test_logs="Test completed successfully"
               fi
               
-              # 4. Send final result (ONCE)
-              send_webhook "$test_id" "$test_status" "$duration" "$test_logs"
+              # 4. Send final result with output file for enhanced failure details
+              send_webhook "$test_id" "$test_status" "$duration" "$test_logs" "$test_output_file"
               
               echo "📊 Test completed: $test_id -> $test_status (${duration}s)"
-              
-              # Small delay to make progress visible
               sleep 1
           done
           
