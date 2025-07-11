@@ -97,7 +97,7 @@ jobs:
           # Create test results directory
           mkdir -p test-results
           
-          # ✅ OPTIMIZED: Single webhook function - now with comprehensive failure data
+          # ✅ OPTIMIZED: Single webhook function - enhanced with additional data while keeping original structure
           send_webhook() {
               local test_id="$1"
               local status="$2"
@@ -108,7 +108,7 @@ jobs:
                   # Clean and escape logs for JSON
                   local escaped_logs=$(echo "$test_logs" | head -20 | tr '\n' ' ' | sed 's/"/\\"/g' | cut -c1-1000)
                   
-                  # Build comprehensive webhook payload
+                  # Build enhanced webhook payload - keeping original structure + adding new fields
                   if [ "$status" = "Failed" ] && [ -n "$error_type" ]; then
                       # Enhanced payload with failure object for failed tests
                       cat > "webhook_${test_id}_${status}.json" << EOF
@@ -161,7 +161,7 @@ jobs:
           }
           EOF
                   else
-                      # Simple payload for passed/not found tests
+                      # Simple payload for passed/not found tests - original structure preserved
                       cat > "webhook_${test_id}_${status}.json" << EOF
           {
             "requestId": "$REQUEST_ID",
