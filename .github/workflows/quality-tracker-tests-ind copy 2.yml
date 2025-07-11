@@ -97,7 +97,7 @@ jobs:
           # Create test results directory
           mkdir -p test-results
           
-          # ✅ OPTIMIZED: Single webhook function - no duplicates, one User-Agent
+          # ✅ OPTIMIZED: Single webhook function - enhanced with additional data while keeping original structure
           send_webhook() {
               local test_id="$1"
               local status="$2"
@@ -108,8 +108,61 @@ jobs:
                   # Clean and escape logs for JSON
                   local escaped_logs=$(echo "$test_logs" | head -20 | tr '\n' ' ' | sed 's/"/\\"/g' | cut -c1-1000)
                   
-                  # Create webhook payload
-                  cat > "webhook_${test_id}_${status}.json" << EOF
+                  # Build enhanced webhook payload - keeping original structure + adding new fields
+                  if [ "$status" = "Failed" ] && [ -n "$error_type" ]; then
+                      # Enhanced payload with failure object for failed tests
+                      cat > "webhook_${test_id}_${status}.json" << EOF
+          {
+            "requestId": "$REQUEST_ID",
+            "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+            "results": [
+              {
+                "id": "$test_id",
+                "name": "Test $test_id",
+                "status": "$status",
+                "duration": $duration,
+                "logs": "$escaped_logs",
+                "failure": {
+                  "type": "$error_type",
+                  "phase": "$test_phase",
+                  "file": "$error_file",
+                  "line": ${error_line_num:-0},
+                  "method": "$test_method",
+                  "class": "$test_class",
+                  "rawError": "$(echo "$raw_error" | sed 's/"/\\"/g')",
+                  "assertion": {
+                    "available": $([ -n "$assertion_expr" ] && echo "true" || echo "false"),
+                    "expression": "$(echo "$assertion_expr" | sed 's/"/\\"/g')",
+                    "expected": "$(echo "$assertion_expected" | sed 's/"/\\"/g')",
+                    "actual": "$(echo "$assertion_actual" | sed 's/"/\\"/g')",
+                    "operator": "$assertion_operator"
+                  }
+                },
+                "execution": {
+                  "exitCode": ${exit_code:-1},
+                  "framework": "pytest",
+                  "collected": ${collected:-0},
+                  "selected": ${selected:-1},
+                  "deselected": ${deselected:-0},
+                  "pytestDuration": ${pytest_duration:-0},
+                  "setupDuration": ${setup_duration:-0},
+                  "callDuration": ${call_duration:-0},
+                  "teardownDuration": ${teardown_duration:-0}
+                },
+                "environment": {
+                  "python": "$python_version",
+                  "pytest": "$pytest_version",
+                  "platform": "$platform",
+                  "ci": "GitHub Actions",
+                  "browser": "$browser"
+                }
+              }
+            ]
+          }
+          EOF
+                  else
+                      # Simple payload for passed/not found tests - original structure preserved
+                      cat > "webhook_${test_id}_${status}.json" << EOF
           {
             "requestId": "$REQUEST_ID",
             "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
@@ -124,6 +177,7 @@ jobs:
             ]
           }
           EOF
+                  fi
                   
                   echo "📡 Sending webhook: $test_id -> $status"
                   
@@ -258,17 +312,54 @@ jobs:
               end_time=$(date +%s)
               duration=$((end_time - start_time))
               
-              # Extract meaningful error message for logs
+              # Extract comprehensive test data for pytest
               if [ -f "$test_output_file" ]; then
                   if [ "$test_status" = "Failed" ]; then
-                      # Extract the main error message from pytest output
+                      # Extract main error message
                       error_line=$(grep -E "^E   " "$test_output_file" | head -1 | sed 's/^E   //')
+                      
+                      # Extract assertion details if available
+                      assertion_expr=$(grep -E ">\s+assert " "$test_output_file" | head -1 | sed 's/>\s*assert //')
+                      
+                      # Extract expected/actual for common patterns
+                      assertion_data=""
+                      if grep -qE "E\s+assert .* == .*" "$test_output_file"; then
+                          actual=$(grep -E "E\s+assert " "$test_output_file" | head -1 | sed -E 's/E\s+assert ([^=]+) ==.*/\1/' | xargs)
+                          expected=$(grep -E "E\s+assert " "$test_output_file" | head -1 | sed -E 's/E\s+assert .* == (.*)/\1/' | xargs)
+                          assertion_data="Expected: $expected, Actual: $actual"
+                      elif grep -qE "assert .* in .*" "$test_output_file"; then
+                          assertion_data=$(grep -E "E\s+assert " "$test_output_file" | head -1 | sed 's/E\s+//')
+                      fi
+                      
+                      # Extract error type and location
+                      error_type=$(grep -E "^[A-Za-z]+\.[A-Za-z]+\.[A-Za-z]+Exception:" "$test_output_file" | head -1 | sed -E 's/.*\.([A-Za-z]+Exception):.*/\1/')
+                      error_file=$(grep -E "tests/.*\.py:[0-9]+: in " "$test_output_file" | head -1 | sed -E 's/(tests\/.*\.py:[0-9]+):.*/\1/')
+                      
+                      # Extract test phase (setup, call, teardown)
+                      test_phase="call"
+                      if grep -q "ERROR at setup" "$test_output_file"; then
+                          test_phase="setup"
+                      elif grep -q "ERROR at teardown" "$test_output_file"; then
+                          test_phase="teardown"
+                      fi
+                      
+                      # Build comprehensive error message
                       if [ -n "$error_line" ]; then
                           test_logs="FAILED: $error_line"
+                          if [ -n "$assertion_data" ]; then
+                              test_logs="$test_logs | $assertion_data"
+                          fi
+                          if [ -n "$error_type" ]; then
+                              test_logs="$test_logs | Type: $error_type"
+                          fi
+                          if [ -n "$error_file" ]; then
+                              test_logs="$test_logs | Location: $error_file"
+                          fi
+                          test_logs="$test_logs | Phase: $test_phase"
                       else
-                          # Fallback to short test summary
+                          # Fallback to summary line
                           summary_line=$(grep "ERROR.*$test_id" "$test_output_file" | head -1)
-                          test_logs="${summary_line:-Test failed - check full logs}"
+                          test_logs="${summary_line:-Test failed - check full logs} | Phase: $test_phase"
                       fi
                   elif [ "$test_status" = "Not Found" ]; then
                       test_logs="Test implementation not found for pattern: $test_id"
@@ -292,25 +383,26 @@ jobs:
           echo "🏁 All tests completed! Expected webhooks: $((TOTAL_TESTS * 3))"
         continue-on-error: true
 
-      - name: Generate backward compatible results
+      - name: Generate final results and cleanup
         run: |
-          echo "📊 Generating backward compatible results files..."
+          echo "📊 Generating final consolidated results..."
           
-          # ✅ KEEP: Same as original workflow for backward compatibility
+          # ✅ KEEP: Generate the essential consolidated results file
           if [ -f "current_results.json" ]; then
-            cp current_results.json results.json
+            # ✅ FRONTEND COMPATIBLE: Create results with run ID (pattern matching will find it)
             cp current_results.json "results-$GITHUB_RUN_ID.json"
-            echo "✅ Backward compatible artifact files created"
+            echo "✅ Results file created: results-$GITHUB_RUN_ID.json"
             
             # Display final consolidated results
-            echo "📄 Final consolidated results for artifacts:"
+            echo "📄 Final consolidated results:"
             cat current_results.json | jq '.' || cat current_results.json
           else
             echo "❌ No consolidated results file found"
           fi
           
-          # ✅ KEEP: Generate execution summary (preserves current behavior)
-          cat > generate_execution_summary.py << 'EOF'
+          # ✅ OPTIONAL: Generate execution summary only if needed for analytics
+          if [ "${GENERATE_SUMMARY:-false}" = "true" ]; then
+            cat > generate_execution_summary.py << 'EOF'
           import json
           import os
           import glob
@@ -337,7 +429,6 @@ jobs:
                   
               results = consolidated_data.get("results", [])
               summary["totalTests"] = len(results)
-              summary["consolidatedResults"] = results
               
               # Count statuses including new "Not Found" status
               status_counts = {}
@@ -362,10 +453,19 @@ jobs:
           with open("execution_summary.json", "w") as f:
               json.dump(summary, f, indent=2)
           
-          print("✅ Enhanced execution summary generated with 'Not Found' detection")
+          print("✅ Execution summary generated")
           EOF
+            
+            python generate_execution_summary.py
+            echo "📊 Execution summary generated (optional analytics)"
+          else
+            echo "📊 Skipping execution summary generation"
+          fi
           
-          python generate_execution_summary.py
+          # 🗑️ CLEANUP: Remove temporary webhook files after successful execution
+          echo "🧹 Cleaning up temporary files..."
+          rm -f webhook_*_*.json response_*_*.txt update_consolidated_result.py generate_execution_summary.py initialize_results.py
+          echo "✅ Temporary files cleaned up"
 
       - name: Upload test artifacts
         uses: actions/upload-artifact@v4
@@ -373,10 +473,8 @@ jobs:
           name: test-results-${{ github.run_id }}
           path: |
             results-${{ github.run_id }}.json
-            results.json
             current_results.json
             execution_summary.json
-            webhook_*_*.json
             test-results/
           retention-days: 7
           
