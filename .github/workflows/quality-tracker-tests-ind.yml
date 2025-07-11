@@ -146,7 +146,16 @@ jobs:
                           error_type=$(grep -E "E\s+.*\.(Exception|Error):" "$test_output_file" | head -1 | sed -E 's/.*\.([A-Za-z]+Exception|[A-Za-z]+Error):.*/\1/')
                           if [ -z "$error_type" ]; then
                               error_type=$(grep -E "selenium\.common\.exceptions\.([A-Za-z]+Exception)" "$test_output_file" | head -1 | sed -E 's/.*selenium\.common\.exceptions\.([A-Za-z]+Exception).*/\1/')
-                          fi
+                          # ✅ FIXED: Only send webhook if we're not sending duplicate status
+              local duplicate_check_file="webhook_sent_${test_id}_${status}.flag"
+              
+              if [ -f "$duplicate_check_file" ]; then
+                  echo "⚠️  DEBUG: Skipping duplicate webhook for $test_id -> $status"
+                  return
+              fi
+              
+              # Create flag file to prevent duplicates
+              touch "$duplicate_check_file"
                           if [ -z "$error_type" ]; then
                               error_type=$(grep -E "([A-Za-z]+Exception|[A-Za-z]+Error):" "$test_output_file" | head -1 | sed -E 's/.*([A-Za-z]+Exception|[A-Za-z]+Error):.*/\1/')
                           fi
@@ -551,9 +560,9 @@ jobs:
             echo "📊 Skipping execution summary generation"
           fi
           
-          # 🗑️ CLEANUP: Remove temporary webhook files after successful execution
+          # 🗑️ CLEANUP: Remove temporary webhook files and flag files after successful execution
           echo "🧹 Cleaning up temporary files..."
-          rm -f webhook_*_*.json response_*_*.txt update_consolidated_result.py generate_execution_summary.py initialize_results.py
+          rm -f webhook_*_*.json response_*_*.txt webhook_sent_*_*.flag update_consolidated_result.py generate_execution_summary.py initialize_results.py
           echo "✅ Temporary files cleaned up"
 
       - name: Upload test artifacts
