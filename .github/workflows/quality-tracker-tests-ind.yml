@@ -401,6 +401,66 @@ jobs:
               
               python update_consolidated_result.py
           }
+              
+              # ✅ KEEP: Update consolidated results file for artifacts (preserves current behavior)
+              cat > update_consolidated_result.py << EOF
+          import json
+          import os
+          import time
+          
+          # Load current consolidated results
+          try:
+              with open("current_results.json", "r") as f:
+                  payload = json.load(f)
+          except:
+              payload = {
+                  "requirementId": os.environ.get("REQUIREMENT_ID", ""),
+                  "requestId": os.environ.get("REQUEST_ID", ""),
+                  "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                  "results": []
+              }
+          
+          # Update specific test result in consolidated format
+          test_id = "$test_id"
+          status = "$status"
+          duration = int("$duration" or "0")
+          logs = r"""$test_logs"""
+          
+          # Find and update the test result in consolidated results
+          updated = False
+          for result in payload["results"]:
+              if result["id"] == test_id:
+                  result["status"] = status
+                  result["duration"] = duration
+                  result["logs"] = logs
+                  result["name"] = f"Test {test_id}"
+                  updated = True
+                  break
+          
+          # If not found, add new result to consolidated results
+          if not updated:
+              payload["results"].append({
+                  "id": test_id,
+                  "name": f"Test {test_id}",
+                  "status": status,
+                  "duration": duration,
+                  "logs": logs
+              })
+          
+          # Update timestamp and ensure required fields for artifacts
+          payload["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+          payload["requirementId"] = os.environ.get("REQUIREMENT_ID", "")
+          payload["requestId"] = os.environ.get("REQUEST_ID", "")
+          
+          # Save updated consolidated results for artifact generation
+          with open("current_results.json", "w") as f:
+              json.dump(payload, f, indent=2)
+          
+          print(f"📝 Updated consolidated results: {test_id} -> {status}")
+          EOF
+              
+              python update_consolidated_result.py
+          }
           
           # ✅ FIXED: Process each test with exactly 3 webhook calls
           for test_id in "${TEST_ARRAY[@]}"; do
