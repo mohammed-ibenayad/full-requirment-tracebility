@@ -97,46 +97,21 @@ jobs:
           # Create test results directory
           mkdir -p test-results
           
-          # ✅ Enhanced webhook function for failed tests with comprehensive failure data
-          send_webhook_enhanced() {
+          # ✅ OPTIMIZED: Single webhook function - enhanced with additional data while keeping original structure
+          send_webhook() {
               local test_id="$1"
               local status="$2"
               local duration="$3"
               local test_logs="$4"
-              local error_type="$5"
-              local test_phase="$6"
-              local error_file="$7"
-              local error_line_num="$8"
-              local test_method="$9"
-              local test_class="${10}"
-              local raw_error="${11}"
-              local assertion_expr="${12}"
-              local assertion_expected="${13}"
-              local assertion_actual="${14}"
-              local assertion_operator="${15}"
-              local exit_code="${16}"
-              local collected="${17}"
-              local selected="${18}"
-              local deselected="${19}"
-              local pytest_duration="${20}"
-              local setup_duration="${21}"
-              local call_duration="${22}"
-              local teardown_duration="${23}"
-              local python_version="${24}"
-              local pytest_version="${25}"
-              local platform="${26}"
-              local browser="${27}"
               
               if [ -n "$CALLBACK_URL" ]; then
                   # Clean and escape logs for JSON
                   local escaped_logs=$(echo "$test_logs" | head -20 | tr '\n' ' ' | sed 's/"/\\"/g' | cut -c1-1000)
-                  local escaped_raw_error=$(echo "$raw_error" | sed 's/"/\\"/g' | cut -c1-500)
-                  local escaped_assertion_expr=$(echo "$assertion_expr" | sed 's/"/\\"/g')
-                  local escaped_assertion_expected=$(echo "$assertion_expected" | sed 's/"/\\"/g')
-                  local escaped_assertion_actual=$(echo "$assertion_actual" | sed 's/"/\\"/g')
                   
-                  # Enhanced payload with failure object for failed tests
-                  cat > "webhook_${test_id}_${status}.json" << EOF
+                  # Build enhanced webhook payload - keeping original structure + adding new fields
+                  if [ "$status" = "Failed" ] && [ -n "$error_type" ]; then
+                      # Enhanced payload with failure object for failed tests
+                      cat > "webhook_${test_id}_${status}.json" << EOF
           {
             "requestId": "$REQUEST_ID",
             "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
@@ -154,12 +129,12 @@ jobs:
                   "line": ${error_line_num:-0},
                   "method": "$test_method",
                   "class": "$test_class",
-                  "rawError": "$escaped_raw_error",
+                  "rawError": "$(echo "$raw_error" | sed 's/"/\\"/g')",
                   "assertion": {
                     "available": $([ -n "$assertion_expr" ] && echo "true" || echo "false"),
-                    "expression": "$escaped_assertion_expr",
-                    "expected": "$escaped_assertion_expected",
-                    "actual": "$escaped_assertion_actual",
+                    "expression": "$(echo "$assertion_expr" | sed 's/"/\\"/g')",
+                    "expected": "$(echo "$assertion_expected" | sed 's/"/\\"/g')",
+                    "actual": "$(echo "$assertion_actual" | sed 's/"/\\"/g')",
                     "operator": "$assertion_operator"
                   }
                 },
@@ -185,48 +160,9 @@ jobs:
             ]
           }
           EOF
-                  
-                  echo "📡 Sending enhanced webhook: $test_id -> $status"
-                  
-                  # Send webhook
-                  HTTP_CODE=$(curl -w "%{http_code}" -o "response_${test_id}_${status}.txt" \
-                    -X POST \
-                    -H "Content-Type: application/json" \
-                    -H "User-Agent: GitHub-Actions-Quality-Tracker" \
-                    -H "X-GitHub-Run-ID: $GITHUB_RUN_ID" \
-                    -H "X-Request-ID: $REQUEST_ID" \
-                    -H "X-Test-Case-ID: $test_id" \
-                    -d @"webhook_${test_id}_${status}.json" \
-                    "$CALLBACK_URL" \
-                    --max-time 30 \
-                    -s)
-                  
-                  if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-                    echo "✅ Enhanced webhook sent: $test_id -> $status (HTTP $HTTP_CODE)"
                   else
-                    echo "⚠️ Enhanced webhook failed: $test_id -> $status (HTTP $HTTP_CODE)"
-                    if [ -f "response_${test_id}_${status}.txt" ]; then
-                      cat "response_${test_id}_${status}.txt"
-                    fi
-                  fi
-                  
-                  sleep 0.5
-              fi
-          }
-          
-          # ✅ Simple webhook function for passed/not found tests - keeping original structure
-          send_webhook() {
-              local test_id="$1"
-              local status="$2"
-              local duration="$3"
-              local test_logs="$4"
-              
-              if [ -n "$CALLBACK_URL" ]; then
-                  # Clean and escape logs for JSON
-                  local escaped_logs=$(echo "$test_logs" | head -20 | tr '\n' ' ' | sed 's/"/\\"/g' | cut -c1-1000)
-                  
-                  # Simple payload for passed/not found tests - original structure preserved
-                  cat > "webhook_${test_id}_${status}.json" << EOF
+                      # Simple payload for passed/not found tests - original structure preserved
+                      cat > "webhook_${test_id}_${status}.json" << EOF
           {
             "requestId": "$REQUEST_ID",
             "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
@@ -241,10 +177,11 @@ jobs:
             ]
           }
           EOF
+                  fi
                   
                   echo "📡 Sending webhook: $test_id -> $status"
                   
-                  # Send webhook
+                  # ✅ SINGLE webhook call with consistent User-Agent (no retries to avoid duplicates)
                   HTTP_CODE=$(curl -w "%{http_code}" -o "response_${test_id}_${status}.txt" \
                     -X POST \
                     -H "Content-Type: application/json" \
@@ -266,9 +203,9 @@ jobs:
                     fi
                   fi
                   
+                  # Small delay between webhook calls
                   sleep 0.5
               fi
-          }
               
               # ✅ KEEP: Update consolidated results file for artifacts (preserves current behavior)
               cat > update_consolidated_result.py << EOF
