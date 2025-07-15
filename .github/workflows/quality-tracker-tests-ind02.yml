@@ -279,29 +279,73 @@ jobs:
                   if [ "$has_failure_data" = "true" ]; then
                       echo "✅ Enhanced failure data available"
                       
-                      # Extract failure object from the JSON
-                      local failure_object=$(echo "$failure_json" | jq '.failure')
-                      local execution_object=$(echo "$failure_json" | jq '.execution')
+                      # Extract failure object from the JSON using Python instead of jq
+                      cat > extract_failure_data.py << EOF
+import json
+import sys
+
+try:
+    with open("enhanced-results/failure_${test_id}.json", "r") as f:
+        failure_info = json.load(f)
+    
+    failure_object = failure_info.get("failure", {})
+    execution_object = failure_info.get("execution", {})
+    
+    print("FAILURE_OBJECT_START")
+    print(json.dumps(failure_object, indent=2))
+    print("FAILURE_OBJECT_END")
+    print("EXECUTION_OBJECT_START") 
+    print(json.dumps(execution_object, indent=2))
+    print("EXECUTION_OBJECT_END")
+except Exception as e:
+    print(f"ERROR: {e}", file=sys.stderr)
+    sys.exit(1)
+EOF
                       
-                      # Create enhanced webhook with failure data
-                      cat > "webhooks-generated/webhook_${test_id}_${status}.json" << EOF
-          {
-            "requestId": "$REQUEST_ID",
-            "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
-            "results": [
-              {
-                "id": "$test_id",
-                "name": "Test $test_id",
-                "status": "$status",
-                "duration": $duration,
-                "logs": "$escaped_logs",
-                "failure": $failure_object,
-                "execution": $execution_object
-              }
-            ]
-          }
-          EOF
-                      echo "✅ Enhanced webhook payload created with failure details"
+                      # Extract the objects
+                      python_output=$(python extract_failure_data.py)
+                      if [ $? -eq 0 ]; then
+                          failure_object=$(echo "$python_output" | sed -n '/FAILURE_OBJECT_START/,/FAILURE_OBJECT_END/p' | sed '1d;$d')
+                          execution_object=$(echo "$python_output" | sed -n '/EXECUTION_OBJECT_START/,/EXECUTION_OBJECT_END/p' | sed '1d;$d')
+                      
+                          # Create enhanced webhook with failure data
+                          cat > "webhooks-generated/webhook_${test_id}_${status}.json" << EOF
+{
+  "requestId": "$REQUEST_ID",
+  "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+  "results": [
+    {
+      "id": "$test_id",
+      "name": "Test $test_id",
+      "status": "$status",
+      "duration": $duration,
+      "logs": "$escaped_logs",
+      "failure": $failure_object,
+      "execution": $execution_object
+    }
+  ]
+}
+EOF
+                          echo "✅ Enhanced webhook payload created with failure details"
+                      else
+                          echo "❌ Failed to extract failure data, using basic payload"
+                          
+                          cat > "webhooks-generated/webhook_${test_id}_${status}.json" << EOF
+{
+  "requestId": "$REQUEST_ID",
+  "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+  "results": [
+    {
+      "id": "$test_id",
+      "name": "Test $test_id",
+      "status": "$status",
+      "duration": $duration,
+      "logs": "$escaped_logs"
+    }
+  ]
+}
+EOF
+                      fi
                   else
                       echo "⚠️  No failure data extracted, using basic payload"
                       
@@ -669,63 +713,71 @@ jobs:
           
           if [ -f enhanced_results.json ]; then
             echo "**Universal Results Summary:**" >> $GITHUB_STEP_SUMMARY
-            python3 -c "
-          import json
-          try:
-              with open('enhanced_results.json') as f:
-                  data = json.load(f)
-              
-              summary = data.get('summary', {})
-              stats = summary.get('stats', {})
-              
-              print(f'- 📊 **Total Tests:** {stats.get(\"total\", 0)}')
-              print(f'- ✅ **Passed:** {stats.get(\"passed\", 0)}')
-              print(f'- ❌ **Failed:** {stats.get(\"failed\", 0)}')
-              print(f'- 🔍 **Failed with Failure Data:** {stats.get(\"failedWithData\", 0)}')
-              print(f'- ⚠️ **Not Found:** {stats.get(\"notFound\", 0)}')
-              print(f'- 📈 **Failure Data Success Rate:** {summary.get(\"failureDataSuccessRate\", 0)}%')
-              
-              # Show delivery method status
-              failed = stats.get('failed', 0)
-              with_data = stats.get('failedWithData', 0)
-              
-              if failed > 0:
-                  if with_data == failed:
-                      print(f'- 🎉 **Status:** SUCCESS - All failed tests have failure data')
-                  elif with_data > 0:
-                      print(f'- ⚠️ **Status:** PARTIAL - {with_data}/{failed} failed tests have failure data')
-                  else:
-                      print(f'- ❌ **Status:** ISSUE - No failed tests have failure data')
-              
-              print(f'')
-              print(f'**Delivery Method Compatibility:**')
-              print(f'- 📡 **Webhook Delivery:** {"Enabled" if "$CALLBACK_URL" else "Disabled (no URL configured)"}')
-              print(f'- 🔄 **Polling Compatibility:** Enabled (failure data in artifacts)')
-              print(f'- 📦 **Artifact Structure:** Enhanced with failure details')
-              
-              print(f'')
-              print(f'**Individual Test Results:**')
-              for result in data.get('results', []):
-                  test_id = result.get('id', 'unknown')
-                  status = result.get('status', 'unknown')
-                  has_failure = 'failure' in result
-                  
-                  if status == 'Failed':
-                      if has_failure:
-                          failure_type = result.get('failure', {}).get('type', 'N/A')
-                          print(f'- ❌ **{test_id}:** Failed with failure data (Type: {failure_type})')
-                      else:
-                          print(f'- ❌ **{test_id}:** Failed but no failure data extracted')
-                  elif status == 'Passed':
-                      print(f'- ✅ **{test_id}:** Passed')
-                  elif status == 'Not Found':
-                      print(f'- ⚠️ **{test_id}:** Not Found')
-                  else:
-                      print(f'- ℹ️ **{test_id}:** {status}')
-                      
-          except Exception as e:
-              print(f'- ❌ Error reading enhanced results: {e}')
-          " >> $GITHUB_STEP_SUMMARY
+            cat > analyze_results.py << 'EOF'
+import json
+import os
+
+try:
+    with open('enhanced_results.json') as f:
+        data = json.load(f)
+    
+    summary = data.get('summary', {})
+    stats = summary.get('stats', {})
+    
+    print(f"- 📊 **Total Tests:** {stats.get('total', 0)}")
+    print(f"- ✅ **Passed:** {stats.get('passed', 0)}")
+    print(f"- ❌ **Failed:** {stats.get('failed', 0)}")
+    print(f"- 🔍 **Failed with Failure Data:** {stats.get('failedWithData', 0)}")
+    print(f"- ⚠️ **Not Found:** {stats.get('notFound', 0)}")
+    print(f"- 📈 **Failure Data Success Rate:** {summary.get('failureDataSuccessRate', 0)}%")
+    
+    # Show delivery method status
+    failed = stats.get('failed', 0)
+    with_data = stats.get('failedWithData', 0)
+    
+    if failed > 0:
+        if with_data == failed:
+            print("- 🎉 **Status:** SUCCESS - All failed tests have failure data")
+        elif with_data > 0:
+            print(f"- ⚠️ **Status:** PARTIAL - {with_data}/{failed} failed tests have failure data")
+        else:
+            print("- ❌ **Status:** ISSUE - No failed tests have failure data")
+    
+    print("")
+    print("**Delivery Method Compatibility:**")
+    callback_url = os.environ.get('CALLBACK_URL', '')
+    if callback_url:
+        print("- 📡 **Webhook Delivery:** Enabled")
+    else:
+        print("- 📡 **Webhook Delivery:** Disabled (no URL configured)")
+    print("- 🔄 **Polling Compatibility:** Enabled (failure data in artifacts)")
+    print("- 📦 **Artifact Structure:** Enhanced with failure details")
+    
+    print("")
+    print("**Individual Test Results:**")
+    for result in data.get('results', []):
+        test_id = result.get('id', 'unknown')
+        status = result.get('status', 'unknown')
+        has_failure = 'failure' in result
+        
+        if status == 'Failed':
+            if has_failure:
+                failure_type = result.get('failure', {}).get('type', 'N/A')
+                print(f"- ❌ **{test_id}:** Failed with failure data (Type: {failure_type})")
+            else:
+                print(f"- ❌ **{test_id}:** Failed but no failure data extracted")
+        elif status == 'Passed':
+            print(f"- ✅ **{test_id}:** Passed")
+        elif status == 'Not Found':
+            print(f"- ⚠️ **{test_id}:** Not Found")
+        else:
+            print(f"- ℹ️ **{test_id}:** {status}")
+            
+except Exception as e:
+    print(f"- ❌ Error reading enhanced results: {e}")
+EOF
+            
+            python3 analyze_results.py >> $GITHUB_STEP_SUMMARY
           else
             echo "❌ No enhanced results generated" >> $GITHUB_STEP_SUMMARY
           fi
