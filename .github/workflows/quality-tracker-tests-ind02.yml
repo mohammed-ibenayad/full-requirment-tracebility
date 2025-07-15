@@ -1,4 +1,4 @@
-name: Quality Tracker Test Execution - Enhanced Debug
+name: Quality Tracker Test Execution - Universal Failure Data
 
 on:
   repository_dispatch:
@@ -37,14 +37,13 @@ jobs:
           echo "📋 Test case IDs: $TEST_CASE_IDS"
           echo "🔗 GitHub Run ID: $GITHUB_RUN_ID"
           echo "📝 Request ID: $REQUEST_ID"
-          echo "📡 Callback URL: $CALLBACK_URL"
-          echo "🐛 DEBUG MODE: Enhanced failure data extraction"
+          echo "📡 Callback URL: ${CALLBACK_URL:-'(not configured)'}"
+          echo "🔄 UNIVERSAL MODE: Failure data extraction for both webhook and polling"
 
       - name: Initialize consolidated results file
         run: |
-          echo "📋 Initializing consolidated results file for artifacts..."
+          echo "📋 Initializing consolidated results file..."
           
-          # Create consolidated results JSON for artifact generation
           cat > initialize_results.py << 'EOF'
           import json
           import os
@@ -65,7 +64,6 @@ jobs:
                       "logs": "Test queued for execution"
                   })
           
-          # Consolidated format for artifacts (same as original workflow)
           consolidated_payload = {
               "requirementId": requirement_id,
               "requestId": request_id,
@@ -73,7 +71,6 @@ jobs:
               "results": results
           }
           
-          # Save consolidated results for artifact generation
           with open("current_results.json", "w") as f:
               json.dump(consolidated_payload, f, indent=2)
           
@@ -82,10 +79,10 @@ jobs:
           
           python initialize_results.py
 
-      - name: Run tests with enhanced failure debugging
+      - name: Run tests with universal failure data extraction
         id: run_tests
         run: |
-          echo "🚀 Starting test execution with ENHANCED DEBUGGING..."
+          echo "🚀 Starting test execution with UNIVERSAL failure data extraction..."
           
           # Parse test case IDs into array
           IFS=' ' read -ra TEST_ARRAY <<< "$TEST_CASE_IDS"
@@ -95,9 +92,168 @@ jobs:
           echo "📊 Total tests to run: $TOTAL_TESTS"
           
           # Create test results directory
-          mkdir -p test-results
+          mkdir -p test-results enhanced-results webhooks-generated
           
-          # ✅ ENHANCED: Webhook function with EXTREME debugging for failure data
+          # UNIVERSAL failure data extraction function
+          extract_failure_data() {
+              local test_id="$1"
+              local test_output_file="$2"
+              local exit_code="$3"
+              
+              echo ""
+              echo "🔍 === FAILURE DATA EXTRACTION FOR $test_id ==="
+              
+              if [ ! -f "$test_output_file" ]; then
+                  echo "❌ Output file missing: $test_output_file"
+                  echo '{"hasFailureData": false, "reason": "no_output_file"}'
+                  return
+              fi
+              
+              echo "✅ Output file exists: $(wc -c < "$test_output_file") bytes"
+              
+              # Initialize failure data structure
+              local error_type=""
+              local test_phase="call"
+              local error_file=""
+              local error_line_num=""
+              local test_method=""
+              local test_class=""
+              local raw_error=""
+              local assertion_expr=""
+              local assertion_expected=""
+              local assertion_actual=""
+              local has_failure_data=false
+              
+              # Extract error type with multiple strategies
+              echo "🔍 Extracting error type..."
+              
+              # Strategy 1: E-prefixed exception lines
+              error_type=$(grep -E "E\s+.*\.(Exception|Error):" "$test_output_file" | head -1 | sed -E 's/.*\.([A-Za-z]+Exception|[A-Za-z]+Error):.*/\1/')
+              [ -n "$error_type" ] && echo "  ✅ Strategy 1 (E-lines): '$error_type'"
+              
+              # Strategy 2: Selenium exceptions
+              if [ -z "$error_type" ]; then
+                  error_type=$(grep -E "selenium\.common\.exceptions\.([A-Za-z]+Exception)" "$test_output_file" | head -1 | sed -E 's/.*selenium\.common\.exceptions\.([A-Za-z]+Exception).*/\1/')
+                  [ -n "$error_type" ] && echo "  ✅ Strategy 2 (Selenium): '$error_type'"
+              fi
+              
+              # Strategy 3: General exception patterns
+              if [ -z "$error_type" ]; then
+                  error_type=$(grep -E "([A-Za-z]+Exception|[A-Za-z]+Error):" "$test_output_file" | head -1 | sed -E 's/.*([A-Za-z]+Exception|[A-Za-z]+Error):.*/\1/')
+                  [ -n "$error_type" ] && echo "  ✅ Strategy 3 (General): '$error_type'"
+              fi
+              
+              # Strategy 4: Pytest assertion failures
+              if [ -z "$error_type" ]; then
+                  if grep -q "assert " "$test_output_file"; then
+                      error_type="AssertionError"
+                      echo "  ✅ Strategy 4 (Assert): '$error_type'"
+                  fi
+              fi
+              
+              # Strategy 5: Exit code based
+              if [ -z "$error_type" ] && [ "$exit_code" != "0" ]; then
+                  error_type="TestFailure"
+                  echo "  ✅ Strategy 5 (Exit code): '$error_type'"
+              fi
+              
+              # Extract test phase
+              if grep -q "ERROR at setup" "$test_output_file"; then
+                  test_phase="setup"
+              elif grep -q "ERROR at teardown" "$test_output_file"; then
+                  test_phase="teardown"
+              fi
+              
+              # Extract file location with multiple strategies
+              error_file=$(grep -E "tests/.*\.py::[A-Za-z_]" "$test_output_file" | head -1 | sed -E 's/(tests\/[^:]+\.py)::.*/\1/')
+              if [ -z "$error_file" ]; then
+                  error_file=$(grep -E "tests/.*\.py:[0-9]+: in " "$test_output_file" | head -1 | sed -E 's/(tests\/[^:]+\.py):[0-9]+:.*/\1/')
+              fi
+              if [ -z "$error_file" ]; then
+                  error_file=$(grep -E "tests/.*\.py" "$test_output_file" | head -1 | sed -E 's/.*?(tests\/[^:]+\.py).*/\1/')
+              fi
+              
+              # Extract line number
+              error_line_num=$(grep -E "tests/.*\.py:[0-9]+: in " "$test_output_file" | head -1 | sed -E 's/tests\/[^:]+\.py:([0-9]+):.*/\1/')
+              
+              # Extract method and class
+              test_method=$(grep -E "tests/.*\.py::[A-Za-z_][^:]*::[A-Za-z_]" "$test_output_file" | head -1 | sed -E 's/.*::([A-Za-z_][A-Za-z0-9_]*) .*/\1/')
+              if [ -z "$test_method" ]; then
+                  test_method=$(grep -E "tests/.*\.py:[0-9]+: in ([a-zA-Z_][a-zA-Z0-9_]*)" "$test_output_file" | head -1 | sed -E 's/.*: in ([a-zA-Z_][a-zA-Z0-9_]*).*/\1/')
+              fi
+              
+              test_class=$(grep -E "tests/.*\.py::[A-Za-z_][^:]*::" "$test_output_file" | head -1 | sed -E 's/.*::([A-Za-z_][A-Za-z0-9_]*)::.*/\1/')
+              
+              # Extract raw error with multiple strategies
+              raw_error=$(grep -E "^E   " "$test_output_file" | head -3 | sed 's/^E   //' | tr '\n' ' ' | sed 's/"/\\"/g')
+              if [ -z "$raw_error" ]; then
+                  raw_error=$(grep -A 2 -E "(Exception|Error):" "$test_output_file" | head -2 | tail -1 | sed 's/"/\\"/g')
+              fi
+              
+              # Enhanced assertion extraction
+              if grep -q "assert " "$test_output_file"; then
+                  assertion_expr=$(grep -A 2 -B 2 "assert " "$test_output_file" | head -1 | sed 's/"/\\"/g')
+                  
+                  # Look for pytest's detailed assertion output
+                  if grep -q "where " "$test_output_file"; then
+                      assertion_actual=$(grep "where " "$test_output_file" | head -1 | sed -E 's/.*where .* = (.*)/\1/' | sed 's/"/\\"/g')
+                  fi
+              fi
+              
+              # Determine if we have sufficient failure data
+              if [ -n "$error_type" ] || [ -n "$raw_error" ] || [ -n "$error_file" ]; then
+                  has_failure_data=true
+              fi
+              
+              echo ""
+              echo "📊 === EXTRACTION SUMMARY ==="
+              echo "  - error_type: '${error_type:-N/A}'"
+              echo "  - test_phase: '${test_phase:-call}'"
+              echo "  - error_file: '${error_file:-N/A}'"
+              echo "  - error_line_num: '${error_line_num:-0}'"
+              echo "  - test_method: '${test_method:-N/A}'"
+              echo "  - test_class: '${test_class:-N/A}'"
+              echo "  - raw_error: '${raw_error:0:100}${raw_error:100:1:+...}'"
+              echo "  - assertion_expr: '${assertion_expr:-N/A}'"
+              echo "  - has_failure_data: $has_failure_data"
+              echo "=========================="
+              
+              # Create failure data JSON
+              cat > "enhanced-results/failure_${test_id}.json" << EOF
+          {
+            "testId": "$test_id",
+            "hasFailureData": $has_failure_data,
+            "failure": {
+              "type": "${error_type:-TestFailure}",
+              "phase": "${test_phase:-call}",
+              "file": "${error_file:-}",
+              "line": ${error_line_num:-0},
+              "method": "${test_method:-}",
+              "class": "${test_class:-}",
+              "rawError": "${raw_error:-}",
+              "assertion": {
+                "available": $([ -n "$assertion_expr" ] && echo "true" || echo "false"),
+                "expression": "${assertion_expr:-}",
+                "expected": "${assertion_expected:-}",
+                "actual": "${assertion_actual:-}",
+                "operator": ""
+              }
+            },
+            "execution": {
+              "exitCode": ${exit_code:-1},
+              "framework": "pytest",
+              "outputFileSize": $(wc -c < "$test_output_file"),
+              "outputLines": $(wc -l < "$test_output_file")
+            }
+          }
+          EOF
+              
+              echo "💾 Failure data saved to: enhanced-results/failure_${test_id}.json"
+              echo "🔍 === END FAILURE DATA EXTRACTION ==="
+              echo ""
+          }
+          
+          # Enhanced webhook function that uses extracted failure data
           send_webhook() {
               local test_id="$1"
               local status="$2"
@@ -105,184 +261,30 @@ jobs:
               local test_logs="$4"
               local test_output_file="$5"
               
-              echo ""
-              echo "🔍 ===== WEBHOOK DEBUG START ====="
-              echo "🔍 DEBUG: send_webhook called with:"
-              echo "  - test_id: '$test_id'"
-              echo "  - status: '$status'"
-              echo "  - duration: '$duration'"
-              echo "  - test_output_file: '$test_output_file'"
-              echo "  - test_logs length: ${#test_logs} characters"
+              echo "📡 Generating webhook for: $test_id -> $status"
               
-              if [ -n "$CALLBACK_URL" ]; then
-                  # Clean and escape logs for JSON
-                  local escaped_logs=$(echo "$test_logs" | head -20 | tr '\n' ' ' | sed 's/"/\\"/g' | cut -c1-1000)
+              # Clean and escape logs for JSON
+              local escaped_logs=$(echo "$test_logs" | head -20 | tr '\n' ' ' | sed 's/"/\\"/g' | cut -c1-1000)
+              
+              # Check if we have failure data for this test
+              local failure_data_file="enhanced-results/failure_${test_id}.json"
+              
+              if [ "$status" = "Failed" ] && [ -f "$failure_data_file" ]; then
+                  echo "✅ Using extracted failure data from: $failure_data_file"
                   
-                  # ENHANCED DEBUG: Check file existence and content
-                  if [ "$status" = "Failed" ]; then
-                      echo "🔍 DEBUG: Status is Failed - investigating..."
-                      echo "🔍 DEBUG: Checking test output file: '$test_output_file'"
+                  # Read the failure data
+                  local failure_json=$(cat "$failure_data_file")
+                  local has_failure_data=$(echo "$failure_json" | grep -o '"hasFailureData": *[^,}]*' | sed 's/"hasFailureData": *//')
+                  
+                  if [ "$has_failure_data" = "true" ]; then
+                      echo "✅ Enhanced failure data available"
                       
-                      if [ -f "$test_output_file" ]; then
-                          echo "✅ DEBUG: Output file EXISTS"
-                          echo "📏 DEBUG: File size: $(wc -c < "$test_output_file") bytes"
-                          echo "📏 DEBUG: File lines: $(wc -l < "$test_output_file") lines"
-                          
-                          echo ""
-                          echo "📄 DEBUG: === FULL FILE CONTENT START ==="
-                          cat "$test_output_file"
-                          echo "📄 DEBUG: === FULL FILE CONTENT END ==="
-                          echo ""
-                          
-                          echo "📄 DEBUG: Searching for error patterns..."
-                          echo "🔍 Exception patterns:"
-                          grep -n "Exception:" "$test_output_file" || echo "  - No 'Exception:' found"
-                          echo "🔍 Error patterns:"
-                          grep -n "Error:" "$test_output_file" || echo "  - No 'Error:' found"
-                          echo "🔍 E lines patterns:"
-                          grep -n "^E   " "$test_output_file" || echo "  - No '^E   ' lines found"
-                          echo "🔍 FAILED lines:"
-                          grep -n "FAILED" "$test_output_file" || echo "  - No 'FAILED' found"
-                          echo "🔍 Traceback patterns:"
-                          grep -n "Traceback" "$test_output_file" || echo "  - No 'Traceback' found"
-                          echo "🔍 AssertionError patterns:"
-                          grep -n "AssertionError" "$test_output_file" || echo "  - No 'AssertionError' found"
-                          echo "🔍 Selenium exception patterns:"
-                          grep -n "selenium.common.exceptions" "$test_output_file" || echo "  - No selenium exceptions found"
-                          
-                          # ENHANCED: Extract failure details with more debugging
-                          echo ""
-                          echo "🔍 DEBUG: Starting failure detail extraction..."
-                          
-                          local error_type=""
-                          local test_phase="call"
-                          local error_file=""
-                          local error_line_num=""
-                          local test_method=""
-                          local test_class=""
-                          local raw_error=""
-                          local assertion_expr=""
-                          local assertion_expected=""
-                          local assertion_actual=""
-                          local assertion_operator=""
-                          
-                          # Extract error type with debugging
-                          echo "🔍 DEBUG: Extracting error type..."
-                          error_type=$(grep -E "E\s+.*\.(Exception|Error):" "$test_output_file" | head -1 | sed -E 's/.*\.([A-Za-z]+Exception|[A-Za-z]+Error):.*/\1/')
-                          echo "🔍 DEBUG: error_type attempt 1: '$error_type'"
-                          
-                          if [ -z "$error_type" ]; then
-                              error_type=$(grep -E "selenium\.common\.exceptions\.([A-Za-z]+Exception)" "$test_output_file" | head -1 | sed -E 's/.*selenium\.common\.exceptions\.([A-Za-z]+Exception).*/\1/')
-                              echo "🔍 DEBUG: error_type attempt 2 (selenium): '$error_type'"
-                          fi
-                          
-                          if [ -z "$error_type" ]; then
-                              error_type=$(grep -E "([A-Za-z]+Exception|[A-Za-z]+Error):" "$test_output_file" | head -1 | sed -E 's/.*([A-Za-z]+Exception|[A-Za-z]+Error):.*/\1/')
-                              echo "🔍 DEBUG: error_type attempt 3 (general): '$error_type'"
-                          fi
-                          
-                          if [ -z "$error_type" ]; then
-                              # Check for pytest's assertion errors
-                              if grep -q "assert " "$test_output_file"; then
-                                  error_type="AssertionError"
-                                  echo "🔍 DEBUG: error_type detected as AssertionError from assert statement"
-                              else
-                                  error_type="TestFailure"
-                                  echo "🔍 DEBUG: error_type defaulted to TestFailure"
-                              fi
-                          fi
-                          
-                          echo "🔍 DEBUG: Final error_type: '$error_type'"
-                          
-                          # Extract test phase with debugging
-                          echo "🔍 DEBUG: Extracting test phase..."
-                          if grep -q "ERROR at setup" "$test_output_file"; then
-                              test_phase="setup"
-                              echo "🔍 DEBUG: test_phase detected as setup"
-                          elif grep -q "ERROR at teardown" "$test_output_file"; then
-                              test_phase="teardown"
-                              echo "🔍 DEBUG: test_phase detected as teardown"
-                          else
-                              test_phase="call"
-                              echo "🔍 DEBUG: test_phase defaulted to call"
-                          fi
-                          
-                          # Extract file location with debugging
-                          echo "🔍 DEBUG: Extracting file location..."
-                          error_file=$(grep -E "tests/.*\.py::[A-Za-z_]" "$test_output_file" | head -1 | sed -E 's/(tests\/[^:]+\.py)::.*/\1/')
-                          echo "🔍 DEBUG: error_file attempt 1: '$error_file'"
-                          
-                          if [ -z "$error_file" ]; then
-                              error_file=$(grep -E "tests/.*\.py:[0-9]+: in " "$test_output_file" | head -1 | sed -E 's/(tests\/[^:]+\.py):[0-9]+:.*/\1/')
-                              echo "🔍 DEBUG: error_file attempt 2: '$error_file'"
-                          fi
-                          
-                          if [ -z "$error_file" ]; then
-                              error_file=$(grep -E "tests/.*\.py" "$test_output_file" | head -1 | sed -E 's/.*?(tests\/[^:]+\.py).*/\1/')
-                              echo "🔍 DEBUG: error_file attempt 3: '$error_file'"
-                          fi
-                          
-                          # Extract line number with debugging
-                          error_line_num=$(grep -E "tests/.*\.py:[0-9]+: in " "$test_output_file" | head -1 | sed -E 's/tests\/[^:]+\.py:([0-9]+):.*/\1/')
-                          echo "🔍 DEBUG: error_line_num: '$error_line_num'"
-                          
-                          # Extract method and class with debugging
-                          echo "🔍 DEBUG: Extracting method and class..."
-                          test_method=$(grep -E "tests/.*\.py::[A-Za-z_][^:]*::[A-Za-z_]" "$test_output_file" | head -1 | sed -E 's/.*::([A-Za-z_][A-Za-z0-9_]*) .*/\1/')
-                          echo "🔍 DEBUG: test_method attempt 1: '$test_method'"
-                          
-                          if [ -z "$test_method" ]; then
-                              test_method=$(grep -E "tests/.*\.py:[0-9]+: in ([a-zA-Z_][a-zA-Z0-9_]*)" "$test_output_file" | head -1 | sed -E 's/.*: in ([a-zA-Z_][a-zA-Z0-9_]*).*/\1/')
-                              echo "🔍 DEBUG: test_method attempt 2: '$test_method'"
-                          fi
-                          
-                          test_class=$(grep -E "tests/.*\.py::[A-Za-z_][^:]*::" "$test_output_file" | head -1 | sed -E 's/.*::([A-Za-z_][A-Za-z0-9_]*)::.*/\1/')
-                          echo "🔍 DEBUG: test_class attempt 1: '$test_class'"
-                          
-                          if [ -z "$test_class" ]; then
-                              test_class=$(grep -E "class [A-Z][a-zA-Z0-9_]*:" "$test_output_file" | head -1 | sed -E 's/.*class ([A-Z][a-zA-Z0-9_]*).*/\1/')
-                              echo "🔍 DEBUG: test_class attempt 2: '$test_class'"
-                          fi
-                          
-                          # Extract raw error with debugging
-                          echo "🔍 DEBUG: Extracting raw error..."
-                          raw_error=$(grep -E "^E   " "$test_output_file" | head -3 | sed 's/^E   //' | tr '\n' ' ' | sed 's/"/\\"/g')
-                          echo "🔍 DEBUG: raw_error: '$raw_error'"
-                          
-                          # Enhanced assertion extraction for pytest
-                          echo "🔍 DEBUG: Extracting assertion details..."
-                          if grep -q "assert " "$test_output_file"; then
-                              assertion_expr=$(grep -A 2 -B 2 "assert " "$test_output_file" | head -1 | sed 's/"/\\"/g')
-                              echo "🔍 DEBUG: assertion_expr: '$assertion_expr'"
-                              
-                              # Look for pytest's detailed assertion output
-                              if grep -q "where " "$test_output_file"; then
-                                  assertion_actual=$(grep "where " "$test_output_file" | head -1 | sed -E 's/.*where .* = (.*)/\1/' | sed 's/"/\\"/g')
-                                  echo "🔍 DEBUG: assertion_actual: '$assertion_actual'"
-                              fi
-                          fi
-                          
-                          # DEBUG: Summary of extracted data
-                          echo ""
-                          echo "🔍 DEBUG: === EXTRACTION SUMMARY ==="
-                          echo "  - error_type: '$error_type'"
-                          echo "  - test_phase: '$test_phase'"
-                          echo "  - error_file: '$error_file'"
-                          echo "  - error_line_num: '$error_line_num'"
-                          echo "  - test_method: '$test_method'"
-                          echo "  - test_class: '$test_class'"
-                          echo "  - raw_error: '$raw_error'"
-                          echo "  - assertion_expr: '$assertion_expr'"
-                          echo "  - assertion_actual: '$assertion_actual'"
-                          echo "🔍 DEBUG: ======================="
-                          echo ""
-                          
-                          # Check if we have enough data for failure object
-                          if [ -n "$error_type" ] || [ -n "$raw_error" ]; then
-                              echo "✅ DEBUG: Creating enhanced failure object with extracted data"
-                              
-                              # Build enhanced webhook payload
-                              cat > "webhook_${test_id}_${status}.json" << EOF
+                      # Extract failure object from the JSON
+                      local failure_object=$(echo "$failure_json" | jq '.failure')
+                      local execution_object=$(echo "$failure_json" | jq '.execution')
+                      
+                      # Create enhanced webhook with failure data
+                      cat > "webhooks-generated/webhook_${test_id}_${status}.json" << EOF
           {
             "requestId": "$REQUEST_ID",
             "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
@@ -293,89 +295,17 @@ jobs:
                 "status": "$status",
                 "duration": $duration,
                 "logs": "$escaped_logs",
-                "failure": {
-                  "type": "$error_type",
-                  "phase": "$test_phase",
-                  "file": "$error_file",
-                  "line": ${error_line_num:-0},
-                  "method": "$test_method",
-                  "class": "$test_class",
-                  "rawError": "$raw_error",
-                  "assertion": {
-                    "available": $([ -n "$assertion_expr" ] && echo "true" || echo "false"),
-                    "expression": "$assertion_expr",
-                    "expected": "$assertion_expected",
-                    "actual": "$assertion_actual",
-                    "operator": "$assertion_operator"
-                  }
-                },
-                "execution": {
-                  "exitCode": 1,
-                  "framework": "pytest",
-                  "pytestDuration": $duration
-                }
+                "failure": $failure_object,
+                "execution": $execution_object
               }
             ]
           }
           EOF
-                              
-                              echo "✅ DEBUG: Enhanced failure object created"
-                          else
-                              echo "❌ DEBUG: No failure details extracted, using simple payload"
-                              # Simple payload for failed tests without details
-                              cat > "webhook_${test_id}_${status}.json" << EOF
-          {
-            "requestId": "$REQUEST_ID",
-            "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
-            "results": [
-              {
-                "id": "$test_id",
-                "name": "Test $test_id",
-                "status": "$status",
-                "duration": $duration,
-                "logs": "$escaped_logs"
-              }
-            ]
-          }
-          EOF
-                          fi
-                          
-                          echo ""
-                          echo "📄 DEBUG: === FINAL WEBHOOK PAYLOAD ==="
-                          cat "webhook_${test_id}_${status}.json"
-                          echo "📄 DEBUG: =========================="
-                          echo ""
-                          
-                      else
-                          echo "❌ DEBUG: Output file does not exist: '$test_output_file'"
-                          echo "🔍 DEBUG: Checking directory contents:"
-                          ls -la test-results/ || echo "  - test-results directory doesn't exist"
-                          echo "🔍 DEBUG: Current working directory:"
-                          pwd
-                          echo "🔍 DEBUG: Current directory contents:"
-                          ls -la
-                          
-                          # Simple payload for failed tests without output file
-                          cat > "webhook_${test_id}_${status}.json" << EOF
-          {
-            "requestId": "$REQUEST_ID",
-            "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
-            "results": [
-              {
-                "id": "$test_id",
-                "name": "Test $test_id",
-                "status": "$status",
-                "duration": $duration,
-                "logs": "$escaped_logs"
-              }
-            ]
-          }
-          EOF
-                      fi
+                      echo "✅ Enhanced webhook payload created with failure details"
                   else
-                      echo "🔍 DEBUG: Status is not Failed ('$status'), using simple payload"
-                      # Simple payload for non-failed tests
-                      cat > "webhook_${test_id}_${status}.json" << EOF
+                      echo "⚠️  No failure data extracted, using basic payload"
+                      
+                      cat > "webhooks-generated/webhook_${test_id}_${status}.json" << EOF
           {
             "requestId": "$REQUEST_ID",
             "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
@@ -391,56 +321,59 @@ jobs:
           }
           EOF
                   fi
+              else
+                  echo "ℹ️  Basic webhook for non-failed test or missing failure data"
                   
-                  echo "📡 DEBUG: About to send webhook..."
-                  echo "📡 DEBUG: URL: $CALLBACK_URL"
-                  echo "📡 DEBUG: Test ID: $test_id"
-                  echo "📡 DEBUG: Status: $status"
+                  cat > "webhooks-generated/webhook_${test_id}_${status}.json" << EOF
+          {
+            "requestId": "$REQUEST_ID",
+            "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+            "results": [
+              {
+                "id": "$test_id",
+                "name": "Test $test_id",
+                "status": "$status",
+                "duration": $duration,
+                "logs": "$escaped_logs"
+              }
+            ]
+          }
+          EOF
+              fi
+              
+              # Send webhook if URL is configured
+              if [ -n "$CALLBACK_URL" ]; then
+                  echo "📡 Sending webhook to: $CALLBACK_URL"
                   
-                  # Send webhook with detailed error handling
-                  HTTP_CODE=$(curl -w "%{http_code}" -o "response_${test_id}_${status}.txt" \
+                  HTTP_CODE=$(curl -w "%{http_code}" -o "webhooks-generated/response_${test_id}_${status}.txt" \
                     -X POST \
                     -H "Content-Type: application/json" \
-                    -H "User-Agent: GitHub-Actions-Quality-Tracker-Debug" \
+                    -H "User-Agent: GitHub-Actions-Quality-Tracker-Universal" \
                     -H "X-GitHub-Run-ID: $GITHUB_RUN_ID" \
                     -H "X-Request-ID: $REQUEST_ID" \
                     -H "X-Test-Case-ID: $test_id" \
-                    -d @"webhook_${test_id}_${status}.json" \
+                    -d @"webhooks-generated/webhook_${test_id}_${status}.json" \
                     "$CALLBACK_URL" \
                     --max-time 30 \
                     -s)
                   
-                  echo "📡 DEBUG: Webhook response HTTP code: $HTTP_CODE"
+                  echo "📡 Webhook HTTP response: $HTTP_CODE"
                   
                   if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-                    echo "✅ DEBUG: Webhook sent successfully"
-                    if [ -f "response_${test_id}_${status}.txt" ]; then
-                      echo "📄 DEBUG: Webhook response content:"
-                      cat "response_${test_id}_${status}.txt"
-                    fi
+                      echo "✅ Webhook sent successfully"
                   else
-                    echo "❌ DEBUG: Webhook failed"
-                    if [ -f "response_${test_id}_${status}.txt" ]; then
-                      echo "📄 DEBUG: Error response content:"
-                      cat "response_${test_id}_${status}.txt"
-                    fi
+                      echo "❌ Webhook failed (HTTP $HTTP_CODE)"
                   fi
-                  
-                  sleep 0.5
               else
-                  echo "❌ DEBUG: No CALLBACK_URL configured"
+                  echo "📡 No CALLBACK_URL - webhook saved locally only"
               fi
               
-              echo "🔍 ===== WEBHOOK DEBUG END ====="
-              echo ""
-              
-              # ✅ KEEP: Update consolidated results file for artifacts (preserves current behavior)
+              # Update consolidated results (IMPORTANT for polling mechanism)
               cat > update_consolidated_result.py << EOF
           import json
           import os
           import time
           
-          # Load current consolidated results
           try:
               with open("current_results.json", "r") as f:
                   payload = json.load(f)
@@ -452,13 +385,24 @@ jobs:
                   "results": []
               }
           
-          # Update specific test result in consolidated format
           test_id = "$test_id"
           status = "$status"
           duration = int("$duration" or "0")
           logs = r"""$test_logs"""
           
-          # Find and update the test result in consolidated results
+          # Load failure data if available
+          failure_data = None
+          execution_data = None
+          try:
+              with open("enhanced-results/failure_${test_id}.json", "r") as f:
+                  failure_info = json.load(f)
+                  if failure_info.get("hasFailureData"):
+                      failure_data = failure_info.get("failure")
+                      execution_data = failure_info.get("execution")
+          except:
+              pass
+          
+          # Find and update the test result
           updated = False
           for result in payload["results"]:
               if result["id"] == test_id:
@@ -466,35 +410,49 @@ jobs:
                   result["duration"] = duration
                   result["logs"] = logs
                   result["name"] = f"Test {test_id}"
+                  
+                  # Add failure data if available (CRITICAL for polling)
+                  if failure_data:
+                      result["failure"] = failure_data
+                  if execution_data:
+                      result["execution"] = execution_data
+                      
                   updated = True
                   break
           
-          # If not found, add new result to consolidated results
           if not updated:
-              payload["results"].append({
+              new_result = {
                   "id": test_id,
                   "name": f"Test {test_id}",
                   "status": status,
                   "duration": duration,
                   "logs": logs
-              })
+              }
+              
+              # Add failure data to new result if available
+              if failure_data:
+                  new_result["failure"] = failure_data
+              if execution_data:
+                  new_result["execution"] = execution_data
+                  
+              payload["results"].append(new_result)
           
-          # Update timestamp and ensure required fields for artifacts
           payload["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
           payload["requirementId"] = os.environ.get("REQUIREMENT_ID", "")
           payload["requestId"] = os.environ.get("REQUEST_ID", "")
           
-          # Save updated consolidated results for artifact generation
           with open("current_results.json", "w") as f:
               json.dump(payload, f, indent=2)
           
           print(f"📝 Updated consolidated results: {test_id} -> {status}")
+          if failure_data:
+              print(f"   ✅ Included failure data for polling mechanism")
           EOF
               
               python update_consolidated_result.py
           }
           
-          # ✅ ENHANCED: Process each test with exactly 3 webhook calls + extreme debugging
+          # Process each test
           for test_id in "${TEST_ARRAY[@]}"; do
               if [ -z "$test_id" ]; then continue; fi
               
@@ -504,69 +462,51 @@ jobs:
               
               # Define output file path
               test_output_file="test-results/output-${test_id}.log"
-              echo "🔍 DEBUG: Output file will be: '$test_output_file'"
               
               # 1. Send "Not Started" status
-              echo "📡 Sending 'Not Started' webhook..."
               send_webhook "$test_id" "Not Started" "0" "Test queued for execution" ""
               
               # 2. Send "Running" status  
-              echo "📡 Sending 'Running' webhook..."
               send_webhook "$test_id" "Running" "0" "Test execution in progress..." ""
               
               # 3. Run the test and capture detailed output
               start_time=$(date +%s)
               
-              echo ""
               echo "▶️  Executing pytest for test: $test_id"
-              echo "▶️  Command: python -m pytest -v -k \"$test_id\" --tb=long"
-              echo "▶️  Output file: $test_output_file"
-              echo ""
               
-              # ENHANCED: Run pytest with maximum verbosity and error details
               if python -m pytest -v -k "$test_id" --tb=long --showlocals \
                   --junit-xml="test-results/junit-${test_id}.xml" \
                   --json-report --json-report-file="test-results/json-${test_id}.json" \
                   > "$test_output_file" 2>&1; then
                   
                   test_status="Passed"
+                  test_exit_code=0
                   echo "✅ Test PASSED: $test_id"
               else
-                  exit_code=$?
-                  echo "❌ Test execution finished with exit code: $exit_code"
+                  test_exit_code=$?
                   
-                  if [ $exit_code -eq 5 ] || grep -q "collected 0 items" "$test_output_file"; then
+                  if [ $test_exit_code -eq 5 ] || grep -q "collected 0 items" "$test_output_file"; then
                       test_status="Not Found"
                       echo "⚠️  Test implementation NOT FOUND: $test_id"
                   else
                       test_status="Failed"
-                      echo "❌ Test FAILED: $test_id"
+                      echo "❌ Test FAILED: $test_id (exit code: $test_exit_code)"
+                      
+                      # CRITICAL: Extract failure data for failed tests
+                      extract_failure_data "$test_id" "$test_output_file" "$test_exit_code"
                   fi
-                  
-                  echo ""
-                  echo "🔍 DEBUG: Post-execution file analysis:"
-                  if [ -f "$test_output_file" ]; then
-                      echo "✅ Output file exists"
-                      echo "📏 File size: $(wc -c < "$test_output_file") bytes"
-                      echo "📏 File lines: $(wc -l < "$test_output_file") lines"
-                      echo "📄 File permissions: $(ls -l "$test_output_file")"
-                  else
-                      echo "❌ Output file missing!"
-                  fi
-                  echo ""
               fi
               
               end_time=$(date +%s)
               duration=$((end_time - start_time))
               
-              # Build test logs based on status
+              # Build test logs
               if [ "$test_status" = "Failed" ]; then
-                  # Extract key error information for logs
                   if [ -f "$test_output_file" ]; then
                       error_summary=$(grep -E "^E   " "$test_output_file" | head -1 | sed 's/^E   //')
-                      test_logs="FAILED: ${error_summary:-Test execution failed with exit code $exit_code}"
+                      test_logs="FAILED: ${error_summary:-Test execution failed}"
                   else
-                      test_logs="FAILED: Test execution failed (no output file generated)"
+                      test_logs="FAILED: Test execution failed (no output file)"
                   fi
               elif [ "$test_status" = "Not Found" ]; then
                   test_logs="Test implementation not found for pattern: $test_id"
@@ -574,377 +514,229 @@ jobs:
                   test_logs="Test completed successfully"
               fi
               
-              # 4. Send final result with ALL debugging
-              echo ""
-              echo "📡 Sending final result webhook..."
-              echo "🔍 DEBUG: Final webhook parameters:"
-              echo "  - test_id: '$test_id'"
-              echo "  - test_status: '$test_status'"
-              echo "  - duration: '$duration'"
-              echo "  - test_logs: '$test_logs'"
-              echo "  - test_output_file: '$test_output_file'"
-              echo ""
-              
+              # 4. Send final result with failure data (if extracted)
               send_webhook "$test_id" "$test_status" "$duration" "$test_logs" "$test_output_file"
               
-              echo ""
               echo "📊 Test completed: $test_id -> $test_status (${duration}s)"
               echo "🧪 ===== TEST PROCESSING COMPLETE ====="
-              echo ""
               sleep 1
           done
           
           echo ""
-          echo "🏁 All tests completed! Expected webhooks: $((TOTAL_TESTS * 3))"
+          echo "🏁 All tests completed!"
         continue-on-error: true
 
-      - name: Generate final results and debug summary
+      - name: Create enhanced results summary for polling compatibility
         run: |
-          echo "📊 Generating final consolidated results and debug summary..."
+          echo "📊 Creating enhanced results summary compatible with both webhook and polling..."
           
-          # ✅ KEEP: Generate the essential consolidated results file
-          if [ -f "current_results.json" ]; then
-            # ✅ FRONTEND COMPATIBLE: Create results with run ID (pattern matching will find it)
-            cp current_results.json "results-$GITHUB_RUN_ID.json"
-            echo "✅ Results file created: results-$GITHUB_RUN_ID.json"
-            
-            # Display final consolidated results
-            echo "📄 Final consolidated results:"
-            cat current_results.json | jq '.' || cat current_results.json
-          else
-            echo "❌ No consolidated results file found"
-          fi
-          
-          # ENHANCED: Debug summary generation
-          echo ""
-          echo "🐛 === ENHANCED DEBUG SUMMARY ==="
-          echo "📁 Working directory: $(pwd)"
-          echo "📁 Directory contents:"
-          ls -la
-          echo ""
-          echo "📁 test-results directory:"
-          ls -la test-results/ || echo "  - test-results directory doesn't exist"
-          echo ""
-          echo "📄 Generated webhook files:"
-          ls -la webhook_*_*.json || echo "  - No webhook files found"
-          echo ""
-          echo "📄 Response files:"
-          ls -la response_*_*.txt || echo "  - No response files found"
-          echo ""
-          echo "📄 Output files:"
-          ls -la test-results/output-*.log || echo "  - No output log files found"
-          echo ""
-          
-          # Show contents of any webhook files that were created
-          echo "📄 Webhook file contents (for debugging):"
-          for webhook_file in webhook_*_*.json; do
-              if [ -f "$webhook_file" ]; then
-                  echo "--- $webhook_file ---"
-                  cat "$webhook_file"
-                  echo ""
-              fi
-          done
-          
-          # Show contents of any response files
-          echo "📄 Response file contents (for debugging):"
-          for response_file in response_*_*.txt; do
-              if [ -f "$response_file" ]; then
-                  echo "--- $response_file ---"
-                  cat "$response_file"
-                  echo ""
-              fi
-          done
-          
-          # Show sample of output files
-          echo "📄 Output file samples (first 50 lines each):"
-          for output_file in test-results/output-*.log; do
-              if [ -f "$output_file" ]; then
-                  echo "--- $output_file (first 50 lines) ---"
-                  head -50 "$output_file"
-                  echo ""
-                  echo "--- $output_file (last 20 lines) ---"
-                  tail -20 "$output_file"
-                  echo ""
-              fi
-          done
-          
-          echo "🐛 === END DEBUG SUMMARY ==="
-          echo ""
-          
-          # Generate execution summary with debug info
-          cat > generate_debug_summary.py << 'EOF'
+          # Create enhanced artifact files for polling mechanism
+          cat > create_enhanced_artifacts.py << 'EOF'
           import json
           import os
           import glob
           from datetime import datetime
           
-          # Collect webhook files for reference
-          webhook_files = glob.glob("webhook_*_*.json")
-          output_files = glob.glob("test-results/output-*.log")
-          response_files = glob.glob("response_*_*.txt")
+          # Load current consolidated results
+          with open("current_results.json", "r") as f:
+              consolidated_data = json.load(f)
           
-          summary = {
-              "executionMode": "enhanced-debug-with-extreme-logging",
-              "requestId": os.environ.get("REQUEST_ID", ""),
-              "requirementId": os.environ.get("REQUIREMENT_ID", ""),
-              "timestamp": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-              "debug": {
-                  "webhookFiles": len(webhook_files),
-                  "outputFiles": len(output_files),
-                  "responseFiles": len(response_files),
-                  "workingDirectory": os.getcwd(),
-                  "directoryContents": os.listdir("."),
-                  "testResultsExists": os.path.exists("test-results"),
-                  "consolidatedResultsExists": os.path.exists("current_results.json")
-              },
-              "githubRunId": os.environ.get("GITHUB_RUN_ID", ""),
-              "note": "Enhanced debugging for failure data extraction issues"
+          results = consolidated_data.get("results", [])
+          
+          # Count different result types
+          stats = {
+              "total": len(results),
+              "passed": 0,
+              "failed": 0,
+              "notFound": 0,
+              "failedWithData": 0,
+              "other": 0
           }
           
-          # Analyze webhook files for failure data
-          failure_data_found = False
-          webhook_analysis = []
+          enhanced_results = []
           
-          for webhook_file in webhook_files:
-              try:
-                  with open(webhook_file, "r") as f:
-                      webhook_data = json.load(f)
-                  
-                  analysis = {
-                      "file": webhook_file,
-                      "testId": webhook_data.get("results", [{}])[0].get("id"),
-                      "status": webhook_data.get("results", [{}])[0].get("status"),
-                      "hasFailureObject": "failure" in webhook_data.get("results", [{}])[0],
-                      "failureKeys": list(webhook_data.get("results", [{}])[0].get("failure", {}).keys()) if "failure" in webhook_data.get("results", [{}])[0] else []
-                  }
-                  
-                  if analysis["hasFailureObject"]:
-                      failure_data_found = True
-                  
-                  webhook_analysis.append(analysis)
-                  
-              except Exception as e:
-                  webhook_analysis.append({
-                      "file": webhook_file,
-                      "error": str(e)
-                  })
+          print("🔍 Processing results for enhanced artifact...")
           
-          summary["debug"]["failureDataFound"] = failure_data_found
-          summary["debug"]["webhookAnalysis"] = webhook_analysis
-          
-          # Analyze output files for error patterns
-          output_analysis = []
-          for output_file in output_files:
-              try:
-                  with open(output_file, "r") as f:
-                      content = f.read()
-                  
-                  analysis = {
-                      "file": output_file,
-                      "size": len(content),
-                      "lines": len(content.split('\n')),
-                      "hasExceptionPattern": "Exception:" in content,
-                      "hasErrorPattern": "Error:" in content,
-                      "hasELinesPattern": "\nE   " in content,
-                      "hasFailedPattern": "FAILED" in content,
-                      "hasAssertPattern": "assert " in content,
-                      "hasSeleniumException": "selenium.common.exceptions" in content,
-                      "hasTraceback": "Traceback" in content
-                  }
-                  
-                  # Extract a few key error lines for analysis
-                  error_lines = []
-                  for line in content.split('\n'):
-                      if any(pattern in line for pattern in ["Exception:", "Error:", "FAILED", "E   "]):
-                          error_lines.append(line.strip())
-                          if len(error_lines) >= 5:  # Limit to 5 lines
-                              break
-                  
-                  analysis["errorLines"] = error_lines
-                  output_analysis.append(analysis)
-                  
-              except Exception as e:
-                  output_analysis.append({
-                      "file": output_file,
-                      "error": str(e)
-                  })
-          
-          summary["debug"]["outputAnalysis"] = output_analysis
-          
-          # Read consolidated results for summary
-          if os.path.exists("current_results.json"):
-              with open("current_results.json", "r") as f:
-                  consolidated_data = json.load(f)
-                  
-              results = consolidated_data.get("results", [])
-              summary["totalTests"] = len(results)
+          for result in results:
+              status = result.get("status", "Unknown")
+              test_id = result.get("id", "unknown")
               
-              # Count statuses including new "Not Found" status
-              status_counts = {}
-              for result in results:
-                  status = result.get('status', 'Unknown')
-                  status_counts[status] = status_counts.get(status, 0) + 1
-              
-              summary["statusSummary"] = status_counts
-              summary["webhooksPerTest"] = 3
-              summary["expectedWebhooks"] = len(results) * 3
-              summary["actualWebhooks"] = len(webhook_files)
-              summary["efficiency"] = "Debug Mode" 
-              
-              print(f"📋 Debug Execution Summary:")
-              print(f"  - Total Tests: {len(results)}")
-              print(f"  - Expected Webhooks: {len(results) * 3}")
-              print(f"  - Actual Webhooks: {len(webhook_files)}")
-              print(f"  - Output Files: {len(output_files)}")
-              print(f"  - Response Files: {len(response_files)}")
-              print(f"  - Failure Data Found: {failure_data_found}")
-              for status, count in status_counts.items():
-                  print(f"  - {status}: {count}")
-              
-              # Print detailed failure analysis
-              if failure_data_found:
-                  print(f"✅ SUCCESS: Failure data was extracted and included in webhooks!")
-                  for analysis in webhook_analysis:
-                      if analysis.get("hasFailureObject"):
-                          print(f"  - {analysis['file']}: {analysis['status']} with failure keys: {analysis['failureKeys']}")
+              # Count by status
+              if status == "Passed":
+                  stats["passed"] += 1
+              elif status == "Failed":
+                  stats["failed"] += 1
+                  if "failure" in result:
+                      stats["failedWithData"] += 1
+              elif status == "Not Found":
+                  stats["notFound"] += 1
               else:
-                  print(f"❌ ISSUE: No failure data found in webhooks")
-                  print(f"📋 Output file analysis:")
-                  for analysis in output_analysis:
-                      if not analysis.get("error"):
-                          print(f"  - {analysis['file']}: {analysis['size']} bytes, patterns found:")
-                          for pattern in ["hasExceptionPattern", "hasErrorPattern", "hasELinesPattern", "hasFailedPattern"]:
-                              if analysis.get(pattern):
-                                  print(f"    ✅ {pattern}")
+                  stats["other"] += 1
+              
+              # Ensure all results have proper structure for both webhook and polling
+              enhanced_result = {
+                  "id": result.get("id"),
+                  "name": result.get("name", f"Test {result.get('id')}"),
+                  "status": result.get("status"),
+                  "duration": result.get("duration", 0),
+                  "logs": result.get("logs", "")
+              }
+              
+              # Include failure data if present (CRITICAL for polling)
+              if "failure" in result:
+                  enhanced_result["failure"] = result["failure"]
+                  print(f"✅ {test_id}: Including failure data in enhanced artifact")
+              else:
+                  print(f"ℹ️  {test_id}: No failure data to include")
+              
+              if "execution" in result:
+                  enhanced_result["execution"] = result["execution"]
+              
+              enhanced_results.append(enhanced_result)
           
-          with open("debug_summary.json", "w") as f:
-              json.dump(summary, f, indent=2)
+          # Create the enhanced artifact structure
+          enhanced_artifact = {
+              "requirementId": consolidated_data.get("requirementId"),
+              "requestId": consolidated_data.get("requestId"),
+              "timestamp": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "results": enhanced_results,
+              "summary": {
+                  "executionMode": "universal-failure-data-extraction",
+                  "deliveryMethods": ["webhook", "polling"],
+                  "stats": stats,
+                  "failureDataSuccessRate": round((stats["failedWithData"] / stats["failed"]) * 100, 1) if stats["failed"] > 0 else 0
+              }
+          }
           
-          print("✅ Debug summary generated")
+          # Save enhanced artifact for polling mechanism
+          with open("enhanced_results.json", "w") as f:
+              json.dump(enhanced_artifact, f, indent=2)
+          
+          # Also create the standard results file for backward compatibility
+          github_run_id = os.environ.get("GITHUB_RUN_ID", "")
+          if github_run_id:
+              with open(f"results-{github_run_id}.json", "w") as f:
+                  json.dump(enhanced_artifact, f, indent=2)
+              print(f"✅ Created standard results file: results-{github_run_id}.json")
+          
+          print("📊 Enhanced Artifact Summary:")
+          print(f"  - Total Tests: {stats['total']}")
+          print(f"  - Passed: {stats['passed']}")
+          print(f"  - Failed: {stats['failed']}")
+          print(f"  - Failed with Failure Data: {stats['failedWithData']}")
+          print(f"  - Not Found: {stats['notFound']}")
+          print(f"  - Other: {stats['other']}")
+          
+          if stats['failed'] > 0:
+              success_rate = (stats['failedWithData'] / stats['failed']) * 100
+              print(f"  - Failure Data Success Rate: {success_rate:.1f}%")
+              
+              if success_rate == 100:
+                  print("🎉 SUCCESS: All failed tests have failure data for both webhook and polling!")
+              elif success_rate > 0:
+                  print(f"⚠️  PARTIAL: {stats['failedWithData']}/{stats['failed']} failed tests have failure data")
+              else:
+                  print("❌ ISSUE: No failed tests have failure data")
+          
+          print("✅ Enhanced results artifact created")
           EOF
           
-          python generate_debug_summary.py
-          
-          # 🗑️ CLEANUP: Keep debug files for analysis (don't remove them in debug mode)
-          echo "🧹 Debug mode: Keeping all debug files for analysis..."
-          echo "📁 Final file inventory:"
-          echo "  - Webhook files: $(ls webhook_*_*.json 2>/dev/null | wc -l)"
-          echo "  - Response files: $(ls response_*_*.txt 2>/dev/null | wc -l)"
-          echo "  - Output files: $(ls test-results/output-*.log 2>/dev/null | wc -l)"
-          echo "  - Debug summary: debug_summary.json"
+          python create_enhanced_artifacts.py
 
-      - name: Upload test artifacts (including debug files)
+      - name: Upload comprehensive artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: test-results-debug-${{ github.run_id }}
+          name: test-results-universal-${{ github.run_id }}
           path: |
             results-${{ github.run_id }}.json
             current_results.json
-            debug_summary.json
+            enhanced_results.json
             test-results/
-            webhook_*_*.json
-            response_*_*.txt
+            enhanced-results/
+            webhooks-generated/
           retention-days: 7
           
-      - name: Enhanced Workflow Summary
+      - name: Universal Workflow Summary
         run: |
-          echo "## 🐛 Quality Tracker DEBUG Execution Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 🔄 Quality Tracker Universal Execution Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Requirement:** $REQUIREMENT_ID - $REQUIREMENT_NAME" >> $GITHUB_STEP_SUMMARY
           echo "**Request ID:** $REQUEST_ID" >> $GITHUB_STEP_SUMMARY
           echo "**Requested Tests:** $TEST_CASE_IDS" >> $GITHUB_STEP_SUMMARY
-          echo "**Execution Mode:** 🐛 **ENHANCED DEBUG MODE** 🐛" >> $GITHUB_STEP_SUMMARY
+          echo "**Callback URL:** ${CALLBACK_URL:-'(not configured - polling only)'}" >> $GITHUB_STEP_SUMMARY
+          echo "**Delivery Methods:** Webhook + Polling Compatible" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          if [ -f current_results.json ]; then
-            echo "**Test Results:**" >> $GITHUB_STEP_SUMMARY
+          if [ -f enhanced_results.json ]; then
+            echo "**Universal Results Summary:**" >> $GITHUB_STEP_SUMMARY
             python3 -c "
           import json
           try:
-              with open('current_results.json') as f:
+              with open('enhanced_results.json') as f:
                   data = json.load(f)
               
-              results = data.get('results', [])
-              status_counts = {}
-              for r in results:
-                  status = r.get('status', 'Unknown')
-                  status_counts[status] = status_counts.get(status, 0) + 1
+              summary = data.get('summary', {})
+              stats = summary.get('stats', {})
               
-              for status, count in status_counts.items():
-                  if status == 'Passed':
-                      emoji = '✅'
-                  elif status == 'Failed':
-                      emoji = '❌'
-                  elif status == 'Not Found':
-                      emoji = '⚠️'
-                  elif status == 'Not Started':
-                      emoji = '⏳'
-                  elif status == 'Running':
-                      emoji = '🔄'
+              print(f'- 📊 **Total Tests:** {stats.get(\"total\", 0)}')
+              print(f'- ✅ **Passed:** {stats.get(\"passed\", 0)}')
+              print(f'- ❌ **Failed:** {stats.get(\"failed\", 0)}')
+              print(f'- 🔍 **Failed with Failure Data:** {stats.get(\"failedWithData\", 0)}')
+              print(f'- ⚠️ **Not Found:** {stats.get(\"notFound\", 0)}')
+              print(f'- 📈 **Failure Data Success Rate:** {summary.get(\"failureDataSuccessRate\", 0)}%')
+              
+              # Show delivery method status
+              failed = stats.get('failed', 0)
+              with_data = stats.get('failedWithData', 0)
+              
+              if failed > 0:
+                  if with_data == failed:
+                      print(f'- 🎉 **Status:** SUCCESS - All failed tests have failure data')
+                  elif with_data > 0:
+                      print(f'- ⚠️ **Status:** PARTIAL - {with_data}/{failed} failed tests have failure data')
                   else:
-                      emoji = '❓'
-                  print(f'- {emoji} **{status}:** {count}')
+                      print(f'- ❌ **Status:** ISSUE - No failed tests have failure data')
+              
+              print(f'')
+              print(f'**Delivery Method Compatibility:**')
+              print(f'- 📡 **Webhook Delivery:** {"Enabled" if "$CALLBACK_URL" else "Disabled (no URL configured)"}')
+              print(f'- 🔄 **Polling Compatibility:** Enabled (failure data in artifacts)')
+              print(f'- 📦 **Artifact Structure:** Enhanced with failure details')
+              
+              print(f'')
+              print(f'**Individual Test Results:**')
+              for result in data.get('results', []):
+                  test_id = result.get('id', 'unknown')
+                  status = result.get('status', 'unknown')
+                  has_failure = 'failure' in result
                   
-              # Show enhanced webhook delivery info
-              total_tests = len(results)
-              expected_webhooks = total_tests * 3
-              print(f'- 📡 **Expected Webhooks:** {expected_webhooks} (3 per test)')
-              print(f'- 📦 **Consolidated Artifacts:** Generated')
-              print(f'- 🐛 **Debug Mode:** Extreme logging enabled')
+                  if status == 'Failed':
+                      if has_failure:
+                          failure_type = result.get('failure', {}).get('type', 'N/A')
+                          print(f'- ❌ **{test_id}:** Failed with failure data (Type: {failure_type})')
+                      else:
+                          print(f'- ❌ **{test_id}:** Failed but no failure data extracted')
+                  elif status == 'Passed':
+                      print(f'- ✅ **{test_id}:** Passed')
+                  elif status == 'Not Found':
+                      print(f'- ⚠️ **{test_id}:** Not Found')
+                  else:
+                      print(f'- ℹ️ **{test_id}:** {status}')
+                      
           except Exception as e:
-              print(f'- ❌ Error reading results: {e}')
+              print(f'- ❌ Error reading enhanced results: {e}')
           " >> $GITHUB_STEP_SUMMARY
           else
-            echo "❌ No consolidated results generated" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          # Add debug summary to GitHub summary
-          if [ -f debug_summary.json ]; then
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**Debug Analysis:**" >> $GITHUB_STEP_SUMMARY
-            python3 -c "
-          import json
-          try:
-              with open('debug_summary.json') as f:
-                  debug = json.load(f)
-              
-              d = debug.get('debug', {})
-              print(f'- 📁 **Webhook Files Generated:** {d.get(\"webhookFiles\", 0)}')
-              print(f'- 📁 **Output Files Generated:** {d.get(\"outputFiles\", 0)}')
-              print(f'- 📁 **Response Files Generated:** {d.get(\"responseFiles\", 0)}')
-              print(f'- 🚨 **Failure Data Found:** {\"✅ YES\" if d.get(\"failureDataFound\") else \"❌ NO\"}')
-              
-              if d.get('webhookAnalysis'):
-                  failed_webhooks = [w for w in d['webhookAnalysis'] if w.get('status') == 'Failed']
-                  if failed_webhooks:
-                      print(f'- 📊 **Failed Test Webhooks:** {len(failed_webhooks)}')
-                      for webhook in failed_webhooks:
-                          has_failure = webhook.get('hasFailureObject', False)
-                          print(f'  - {webhook.get(\"testId\", \"unknown\")}: {\"✅ Has failure data\" if has_failure else \"❌ No failure data\"}')
-              
-              if d.get('outputAnalysis'):
-                  print(f'- 📄 **Output Files Analysis:**')
-                  for output in d['outputAnalysis']:
-                      if not output.get('error'):
-                          patterns = []
-                          if output.get('hasExceptionPattern'): patterns.append('Exception')
-                          if output.get('hasErrorPattern'): patterns.append('Error')
-                          if output.get('hasELinesPattern'): patterns.append('E-lines')
-                          if output.get('hasFailedPattern'): patterns.append('FAILED')
-                          pattern_str = ', '.join(patterns) if patterns else 'No error patterns'
-                          print(f'  - {output.get(\"file\", \"unknown\")}: {pattern_str}')
-                          
-          except Exception as e:
-              print(f'- ❌ Error reading debug summary: {e}')
-          " >> $GITHUB_STEP_SUMMARY
+            echo "❌ No enhanced results generated" >> $GITHUB_STEP_SUMMARY
           fi
           
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Debug Features Enabled:**" >> $GITHUB_STEP_SUMMARY
-          echo "- 🐛 **Extreme Logging:** Every step is logged in detail" >> $GITHUB_STEP_SUMMARY
-          echo "- 📄 **Full File Contents:** Complete output files shown in logs" >> $GITHUB_STEP_SUMMARY
-          echo "- 🔍 **Pattern Analysis:** All error patterns searched and reported" >> $GITHUB_STEP_SUMMARY
-          echo "- 📊 **Extraction Debugging:** Step-by-step failure data extraction" >> $GITHUB_STEP_SUMMARY
-          echo "- 📡 **Webhook Debugging:** Complete webhook payload logging" >> $GITHUB_STEP_SUMMARY
-          echo "- 📁 **File Preservation:** All debug files kept in artifacts" >> $GITHUB_STEP_SUMMARY
-          echo "- 📋 **Debug Summary:** Comprehensive analysis report generated" >> $GITHUB_STEP_SUMMARY
+          echo "**Universal Features:**" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔄 **Dual Delivery Support:** Works with both webhook and polling mechanisms" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔍 **Advanced Failure Extraction:** 5 different strategies for error detection" >> $GITHUB_STEP_SUMMARY
+          echo "- 📊 **Comprehensive Data:** Extracts error type, file location, method, raw error" >> $GITHUB_STEP_SUMMARY
+          echo "- 📦 **Enhanced Artifacts:** Failure data included in downloadable artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "- 🎯 **Backward Compatible:** Works with existing polling and webhook systems" >> $GITHUB_STEP_SUMMARY
+          echo "- 📡 **Smart Webhook Generation:** Only sends enhanced payloads when failure data exists" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔬 **Detailed Analysis:** Individual failure data files for debugging" >> $GITHUB_STEP_SUMMARY
+          echo "- 📈 **Success Metrics:** Tracks failure data extraction success rate" >> $GITHUB_STEP_SUMMARY
