@@ -124,7 +124,9 @@ jobs:
                                   line_num = 0
                                   method_name = ""
                                   class_name = ""
-                                  raw_error = crash_info.get('longrepr', '').replace('"', '\\"') # Use longrepr for comprehensive error
+                                  # Use longrepr for comprehensive error, escape for JSON
+                                  raw_error_content = crash_info.get('longrepr', '')
+                                  raw_error = json.dumps(raw_error_content).strip('"') # Safely encode and remove surrounding quotes
 
                                   if traceback_info:
                                       # Get the last frame that's not internal selenium/pytest for relevant context
@@ -142,13 +144,13 @@ jobs:
                                                       class_name = parts[-2]
                                               break # Take the first relevant stack frame
 
-                                  # Fallback for raw_error if longrepr is not what we want
-                                  if not raw_error and os.path.exists(test_output_file):
+                                  # Fallback for raw_error if longrepr is not what we want or missing
+                                  if not raw_error_content and os.path.exists(test_output_file):
                                       with open(test_output_file, 'r') as log_f:
                                           log_content = log_f.read()
                                           # Extract E lines from raw log, similar to old bash logic
                                           e_lines = [line[4:].strip() for line in log_content.splitlines() if line.startswith('E   ')]
-                                          raw_error = ' '.join(e_lines[:3]).replace('"', '\\"') # Limit to first 3 lines
+                                          raw_error = json.dumps(' '.join(e_lines[:3])).strip('"') # Safely encode and limit to first 3 lines
 
                                   failure_object = {
                                       "type": error_type,
@@ -184,7 +186,7 @@ jobs:
               local test_id="$1"
               local status="$2"
               local duration="$3"
-              local test_logs="$4"
+              local test_logs_raw="$4" # Raw logs directly from the step output
               local test_output_file="$5"
               local json_report_file="test-results/json-${test_id}.json"
 
@@ -199,9 +201,10 @@ jobs:
                   unset CURRENT_TEST_ID CURRENT_JSON_REPORT_FILE CURRENT_TEST_OUTPUT_FILE CURRENT_TEST_STATUS
               fi
 
-              if [ -n "$CALLBACK_URL" ]; then
-                  local escaped_logs=$(echo "$test_logs" | head -20 | tr '\n' ' ' | sed 's/"/\\"/g' | cut -c1-1000)
+              # Ensure logs are properly escaped for JSON and limited in length for webhook
+              local escaped_logs=$(echo "$test_logs_raw" | head -20 | tr '\n' ' ' | sed 's/"/\\"/g' | cut -c1-1000)
 
+              if [ -n "$CALLBACK_URL" ]; then
                   cat > "webhook_${test_id}_${status}.json" << EOF
           {
             "requestId": "$REQUEST_ID",
@@ -274,11 +277,11 @@ jobs:
           test_id = "$test_id"
           status = "$status"
           duration = int("$duration" or "0")
-          # Escaped logs are passed from bash
-          logs = r\"\"\"$escaped_logs\"\"\" # Use escaped_logs for consistency
+          # The logs passed here are already escaped and limited from the bash function
+          logs = "$escaped_logs"
 
           # Use the failure object already extracted by the Python script
-          failure_object_json = r\"\"\"$failure_object\"\"\"
+          failure_object_json = "$failure_object" # This will be the JSON string 'null' or the JSON object
           failure_obj = None
 
           if failure_object_json.strip() and failure_object_json.strip() != "null":
@@ -298,6 +301,7 @@ jobs:
                   result["failure"] = failure_obj  # NEW: Include failure object
                   result["execution"]["exitCode"] = 1 if status == "Failed" else 0
                   result["execution"]["pytestDuration"] = duration
+                  result["execution"]["outputFile"] = f"test-results/output-{test_id}.log" # Ensure output file is set
                   updated = True
                   break
 
@@ -355,10 +359,12 @@ jobs:
               json_report_file="test-results/json-${test_id}.json" # Define JSON report file path
 
               # 1. Send "Not Started" status
-              send_webhook "$test_id" "Not Started" "0" "Test queued for execution" ""
+              send_webhook "$test_id" "Not Started" "0" "Test queued for execution" "$test_output_file" # Pass output_file
+              sleep 0.1 # Small delay to avoid race conditions with webhook processing
 
               # 2. Send "Running" status
-              send_webhook "$test_id" "Running" "0" "Test execution in progress..." ""
+              send_webhook "$test_id" "Running" "0" "Test execution in progress..." "$test_output_file" # Pass output_file
+              sleep 0.1 # Small delay
 
               # 3. Run the test and capture detailed output
               start_time=$(date +%s)
@@ -366,6 +372,7 @@ jobs:
               echo "▶️  Executing: python -m pytest -v -k \"$test_id\" --tb=long"
 
               # Run test with enhanced error capture
+              # Capture stdout and stderr to the output file
               if python -m pytest -v -k "$test_id" --tb=long \
                   --junit-xml="test-results/junit-${test_id}.xml" \
                   --json-report --json-report-file="$json_report_file" \
@@ -388,16 +395,11 @@ jobs:
               end_time=$(date +%s)
               duration=$((end_time - start_time))
 
-              # Build test logs based on status
-              if [ "$test_status" = "Failed" ]; then
-                  error_summary=$(grep -E "^E   " "$test_output_file" | head -1 | sed 's/^E   //')
-                  test_logs="FAILED: ${error_summary:-Test execution failed}"
-              else
-                  test_logs="Test completed successfully"
-              fi
+              # Read raw logs from file for consistency
+              test_logs_content=$(cat "$test_output_file")
 
               # 4. Send final result with enhanced data
-              send_webhook "$test_id" "$test_status" "$duration" "$test_logs" "$test_output_file"
+              send_webhook "$test_id" "$test_status" "$duration" "$test_logs_content" "$test_output_file" # Pass full logs
 
               echo "📊 Test completed: $test_id -> $test_status (${duration}s)"
               sleep 1
@@ -411,7 +413,7 @@ jobs:
         run: |
           echo "📊 Generating enhanced final consolidated results..."
 
-          # ENHANCED: Generate enhanced summary with failure analysis (keep using the existing python script)
+          # ENHANCED: Generate enhanced summary with failure analysis
           cat > generate_enhanced_summary.py << EOF
           import json
           import os
@@ -458,7 +460,8 @@ jobs:
                           failed_tests += 1
                           # Extract and store detailed failure info
                           failure_obj = test.get("failure")
-                          if failure_obj and failure_obj != "null":
+                          # Check if failure_obj is not None and not the string "null"
+                          if failure_obj is not None and failure_obj != "null":
                               failure_details.append({
                                   "id": test_id,
                                   "type": failure_obj.get("type", "UnknownType"),
@@ -506,11 +509,7 @@ jobs:
                   summary_content.append("- 📡 **Webhooks:** Automated notifications with rich failure data.")
                   summary_content.append("- 💾 **Backup Debugging:** Full failure information available even if webhook delivery fails.")
 
-                  # Print to standard output for capture by GITHUB_STEP_SUMMARY
-                  for line in summary_content:
-                      print(line)
-
-                  # Also print to file for artifact
+                  # Write to summary.md file
                   with open("summary.md", "w") as f:
                       for line in summary_content:
                           f.write(line + "\n")
@@ -533,8 +532,14 @@ jobs:
             echo "📄 Enhanced consolidated results with failure objects:"
             cat current_results.json | jq '.' || cat current_results.json
 
-            # Generate enhanced summary with failure analysis
-            python generate_enhanced_summary.py >> $GITHUB_STEP_SUMMARY
+            # Run the Python script and pipe its output to GITHUB_STEP_SUMMARY
+            python generate_enhanced_summary.py
+            # Now, explicitly cat the generated summary.md to $GITHUB_STEP_SUMMARY
+            if [ -f "summary.md" ]; then
+                cat summary.md >> $GITHUB_STEP_SUMMARY
+            else
+                echo "❌ summary.md file was not generated." >> $GITHUB_STEP_SUMMARY
+            fi
           else
             echo "❌ No enhanced consolidated results found" >> $GITHUB_STEP_SUMMARY
             echo "❌ No enhanced consolidated results found"
