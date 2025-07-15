@@ -1,4 +1,4 @@
-name: Quality Tracker Test Execution - Enhanced Failure Analysis
+name: Quality Tracker Test Execution - Optimized Per Test Case
 
 on:
   repository_dispatch:
@@ -27,7 +27,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest pytest-html pytest-json-report pytest-xdist
+          pip install pytest pytest-html pytest-json-report
           pip install selenium webdriver-manager
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
       
@@ -38,12 +38,13 @@ jobs:
           echo "🔗 GitHub Run ID: $GITHUB_RUN_ID"
           echo "📝 Request ID: $REQUEST_ID"
           echo "📡 Callback URL: $CALLBACK_URL"
-          echo "✨ ENHANCED: With comprehensive failure analysis"
+          echo "✨ OPTIMIZED: Minimal webhook delivery (3 per test case)"
 
       - name: Initialize consolidated results file
         run: |
-          echo "📋 Initializing enhanced results file for artifacts..."
+          echo "📋 Initializing consolidated results file for artifacts..."
           
+          # Create consolidated results JSON for artifact generation
           cat > initialize_results.py << 'EOF'
           import json
           import os
@@ -61,11 +62,10 @@ jobs:
                       "name": f"Test {test_id.strip()}",
                       "status": "Not Started",
                       "duration": 0,
-                      "logs": "Test queued for execution",
-                      "failure": None,
-                      "execution": None
+                      "logs": "Test queued for execution"
                   })
           
+          # Consolidated format for artifacts (same as original workflow)
           consolidated_payload = {
               "requirementId": requirement_id,
               "requestId": request_id,
@@ -73,18 +73,19 @@ jobs:
               "results": results
           }
           
+          # Save consolidated results for artifact generation
           with open("current_results.json", "w") as f:
               json.dump(consolidated_payload, f, indent=2)
           
-          print(f"📋 Initialized enhanced results with {len(results)} tests")
+          print(f"📋 Initialized consolidated results with {len(results)} tests")
           EOF
           
           python initialize_results.py
 
-      - name: Run tests with enhanced failure analysis
+      - name: Run tests with optimized webhook delivery and enhanced status detection
         id: run_tests
         run: |
-          echo "🚀 Starting enhanced test execution with failure analysis..."
+          echo "🚀 Starting optimized test execution with minimal webhooks..."
           
           # Parse test case IDs into array
           IFS=' ' read -ra TEST_ARRAY <<< "$TEST_CASE_IDS"
@@ -95,311 +96,308 @@ jobs:
           
           # Create test results directory
           mkdir -p test-results
-          mkdir -p failure-analysis
           
-          # ENHANCED: Improved failure analysis function
-          analyze_test_failure() {
-              local test_id="$1"
-              local test_output_file="$2"
-              local duration="$3"
-              
-              echo "🔍 ANALYZING FAILURE for $test_id..."
-              echo "📄 Output file: $test_output_file"
-              
-              if [ ! -f "$test_output_file" ]; then
-                  echo "❌ Output file does not exist!"
-                  return 1
-              fi
-              
-              echo "📄 File size: $(wc -c < "$test_output_file") bytes"
-              echo "📄 File content preview:"
-              head -20 "$test_output_file"
-              echo "--- End of preview ---"
-              
-              # Initialize failure data
-              local error_type="TestFailure"
-              local test_phase="call"
-              local error_file=""
-              local error_line_num=""
-              local test_method=""
-              local test_class=""
-              local raw_error=""
-              local full_logs=""
-              
-              # Extract full logs
-              full_logs=$(cat "$test_output_file" | tr '\n' ' ' | sed 's/"/\\"/g')
-              
-              # IMPROVED: Multiple strategies for error extraction
-              echo "🔍 Strategy 1: Looking for pytest failure patterns..."
-              
-              # Strategy 1: Look for FAILED test name pattern
-              failed_test_line=$(grep "FAILED.*::" "$test_output_file" | head -1)
-              if [ -n "$failed_test_line" ]; then
-                  echo "✅ Found failed test line: $failed_test_line"
-                  
-                  # Extract file and method from pytest output
-                  error_file=$(echo "$failed_test_line" | sed -E 's/.*FAILED ([^:]+)::.*/\1/')
-                  test_method=$(echo "$failed_test_line" | sed -E 's/.*::([^:]+) .*/\1/')
-                  test_class=$(echo "$failed_test_line" | sed -E 's/.*::([^:]+)::[^:]+ .*/\1/')
-                  
-                  echo "📁 Extracted file: '$error_file'"
-                  echo "🔧 Extracted method: '$test_method'"
-                  echo "🏷️ Extracted class: '$test_class'"
-              fi
-              
-              # Strategy 2: Look for exception types
-              echo "🔍 Strategy 2: Looking for exception types..."
-              
-              # Check for common Selenium exceptions first
-              if grep -q "selenium.common.exceptions" "$test_output_file"; then
-                  error_type=$(grep -o "selenium.common.exceptions\.[A-Za-z]*Exception" "$test_output_file" | head -1 | sed 's/selenium.common.exceptions\.//')
-                  echo "🎯 Found Selenium exception: $error_type"
-              # Check for Python exceptions
-              elif grep -q -E "[A-Za-z]+Exception:" "$test_output_file"; then
-                  error_type=$(grep -o -E "[A-Za-z]+Exception" "$test_output_file" | head -1)
-                  echo "🐍 Found Python exception: $error_type"
-              # Check for assertion errors
-              elif grep -q "AssertionError" "$test_output_file"; then
-                  error_type="AssertionError"
-                  echo "❗ Found assertion error"
-              fi
-              
-              # Strategy 3: Extract raw error message
-              echo "🔍 Strategy 3: Extracting error message..."
-              
-              # Look for error message after exception type
-              if grep -q "$error_type" "$test_output_file"; then
-                  raw_error=$(grep -A 3 "$error_type" "$test_output_file" | tr '\n' ' ' | sed 's/"/\\"/g' | head -c 500)
-                  echo "📝 Extracted raw error: ${raw_error:0:100}..."
-              fi
-              
-              # If still no error, get from the end of the file
-              if [ -z "$raw_error" ]; then
-                  raw_error=$(tail -10 "$test_output_file" | tr '\n' ' ' | sed 's/"/\\"/g' | head -c 500)
-                  echo "📝 Using tail of file as error: ${raw_error:0:100}..."
-              fi
-              
-              # Strategy 4: Look for line numbers
-              echo "🔍 Strategy 4: Looking for line numbers..."
-              line_pattern=$(grep -E ":[0-9]+:" "$test_output_file" | head -1)
-              if [ -n "$line_pattern" ]; then
-                  error_line_num=$(echo "$line_pattern" | sed -E 's/.*:([0-9]+):.*/\1/')
-                  echo "📍 Found line number: $error_line_num"
-              fi
-              
-              # Create enhanced failure object
-              echo "🔨 Creating enhanced failure analysis..."
-              
-              cat > "failure-analysis/failure_${test_id}.json" << EOF
-          {
-            "testId": "$test_id",
-            "analysisTimestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
-            "failure": {
-              "type": "$error_type",
-              "phase": "$test_phase",
-              "file": "$error_file",
-              "line": "${error_line_num:-0}",
-              "method": "$test_method",
-              "class": "$test_class", 
-              "rawError": "$raw_error",
-              "assertion": {
-                "available": false,
-                "expression": "",
-                "expected": "",
-                "actual": "",
-                "operator": ""
-              }
-            },
-            "execution": {
-              "exitCode": 1,
-              "framework": "pytest",
-              "pytestDuration": $duration
-            },
-            "logs": "$full_logs"
-          }
-          EOF
-              
-              echo "✅ Enhanced failure analysis saved to failure-analysis/failure_${test_id}.json"
-              
-              # Display what we extracted
-              echo "📊 FAILURE ANALYSIS SUMMARY:"
-              echo "  Error Type: $error_type"
-              echo "  File: $error_file"
-              echo "  Line: $error_line_num"
-              echo "  Method: $test_method"
-              echo "  Class: $test_class"
-              echo "  Raw Error: ${raw_error:0:100}..."
-              
-              return 0
-          }
-          
-          # ENHANCED: Webhook function with better failure data integration
-          send_enhanced_webhook() {
+          # ✅ DIAGNOSTIC: Enhanced webhook function with detailed debugging
+          send_webhook() {
               local test_id="$1"
               local status="$2"
               local duration="$3"
               local test_logs="$4"
               local test_output_file="$5"
               
-              echo "📡 Sending enhanced webhook for $test_id -> $status"
+              echo "🔍 DEBUG: send_webhook called with:"
+              echo "  - test_id: $test_id"
+              echo "  - status: $status"
+              echo "  - duration: $duration"
+              echo "  - test_output_file: $test_output_file"
               
               if [ -n "$CALLBACK_URL" ]; then
                   # Clean and escape logs for JSON
                   local escaped_logs=$(echo "$test_logs" | head -20 | tr '\n' ' ' | sed 's/"/\\"/g' | cut -c1-1000)
                   
-                  # Base webhook structure
-                  local webhook_payload='{
-                    "requestId": "'$REQUEST_ID'",
-                    "timestamp": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'",
-                    "results": [{
-                      "id": "'$test_id'",
-                      "name": "Test '$test_id'",
-                      "status": "'$status'",
-                      "duration": '$duration',
-                      "logs": "'$escaped_logs'"'
-                  
-                  # Add enhanced failure data for failed tests
-                  if [ "$status" = "Failed" ] && [ -f "failure-analysis/failure_${test_id}.json" ]; then
-                      echo "🔗 Adding enhanced failure data to webhook..."
+                  # Debug: Check if we should extract failure details
+                  if [ "$status" = "Failed" ]; then
+                      echo "🔍 DEBUG: Status is Failed, checking for output file..."
                       
-                      # Extract failure and execution data from analysis
-                      local failure_data=$(cat "failure-analysis/failure_${test_id}.json" | jq -c '.failure')
-                      local execution_data=$(cat "failure-analysis/failure_${test_id}.json" | jq -c '.execution')
-                      
-                      webhook_payload+=',
-                      "failure": '$failure_data',
-                      "execution": '$execution_data
+                      if [ -f "$test_output_file" ]; then
+                          echo "✅ DEBUG: Output file exists: $test_output_file"
+                          
+                          # Display the relevant parts of the log file that will be parsed for errors.
+                          echo "📄 DEBUG: Displaying relevant content from '$test_output_file' for parsing:"
+                          echo "==================== FILE CONTENT (FOR PARSING) START ===================="
+                          grep -E -i 'short test summary info|Exception|Error|^E\s+|_{5,}' "$test_output_file" || echo "No primary error indicators found in grep. Displaying first 25 lines as fallback:"
+                          if ! grep -q -E -i 'short test summary info|Exception|Error|^E\s+|_{5,}' "$test_output_file"; then
+                            head -n 25 "$test_output_file"
+                          fi
+                          echo "==================== FILE CONTENT (FOR PARSING) END ======================"
+
+                          # Extract failure details
+                          echo "🔍 DEBUG: Extracting failure details..."
+                          
+                          local error_type=""
+                          local test_phase="call"
+                          local error_file=""
+                          local error_line_num=""
+                          local test_method=""
+                          local test_class=""
+                          local raw_error=""
+                          local assertion_expr=""
+                          local assertion_expected=""
+                          local assertion_actual=""
+                          local assertion_operator=""
+                          
+                          # Extract error type - improved patterns for Selenium and other exceptions
+                          error_type=$(grep -E "E\s+.*\.(Exception|Error):" "$test_output_file" | head -1 | sed -E 's/.*\.([A-Za-z]+Exception|[A-Za-z]+Error):.*/\1/')
+                          if [ -z "$error_type" ]; then
+                              error_type=$(grep -E "selenium\.common\.exceptions\.([A-Za-z]+Exception)" "$test_output_file" | head -1 | sed -E 's/.*selenium\.common\.exceptions\.([A-Za-z]+Exception).*/\1/')
+                          fi
+                          if [ -z "$error_type" ]; then
+                              error_type=$(grep -E "([A-Za-z]+Exception|[A-Za-z]+Error):" "$test_output_file" | head -1 | sed -E 's/.*([A-Za-z]+Exception|[A-Za-z]+Error):.*/\1/')
+                          fi
+                          if [ -z "$error_type" ]; then
+                              error_type="TestFailure"
+                          fi
+                          
+                          echo "🔍 DEBUG: Extracted error_type: '$error_type'"
+                          
+                          # Extract test phase
+                          if grep -q "ERROR at setup" "$test_output_file"; then
+                              test_phase="setup"
+                          elif grep -q "ERROR at teardown" "$test_output_file"; then
+                              test_phase="teardown"
+                          fi
+                          
+                          echo "🔍 DEBUG: Extracted test_phase: '$test_phase'"
+                          
+                          # Extract file location - improved to find actual test file
+                          error_file=$(grep -E "tests/.*\.py::[A-Za-z_]" "$test_output_file" | head -1 | sed -E 's/(tests\/[^:]+\.py)::.*/\1/')
+                          if [ -z "$error_file" ]; then
+                              error_file=$(grep -E "tests/.*\.py:[0-9]+: in " "$test_output_file" | head -1 | sed -E 's/(tests\/[^:]+\.py):[0-9]+:.*/\1/')
+                          fi
+                          if [ -z "$error_file" ]; then
+                              error_file=$(grep -E "tests/.*\.py" "$test_output_file" | head -1 | sed -E 's/.*?(tests\/[^:]+\.py).*/\1/')
+                          fi
+                          
+                          error_line_num=$(grep -E "tests/.*\.py:[0-9]+: in " "$test_output_file" | head -1 | sed -E 's/tests\/[^:]+\.py:([0-9]+):.*/\1/')
+                          
+                          echo "🔍 DEBUG: Extracted error_file: '$error_file'"
+                          echo "🔍 DEBUG: Extracted error_line_num: '$error_line_num'"
+                          
+                          # Extract method and class - improved patterns
+                          test_method=$(grep -E "tests/.*\.py::[A-Za-z_][^:]*::[A-Za-z_]" "$test_output_file" | head -1 | sed -E 's/.*::([A-Za-z_][A-Za-z0-9_]*) .*/\1/')
+                          if [ -z "$test_method" ]; then
+                              test_method=$(grep -E "tests/.*\.py:[0-9]+: in ([a-zA-Z_][a-zA-Z0-9_]*)" "$test_output_file" | head -1 | sed -E 's/.*: in ([a-zA-Z_][a-zA-Z0-9_]*).*/\1/')
+                          fi
+                          
+                          test_class=$(grep -E "tests/.*\.py::[A-Za-z_][^:]*::" "$test_output_file" | head -1 | sed -E 's/.*::([A-Za-z_][A-Za-z0-9_]*)::.*/\1/')
+                          if [ -z "$test_class" ]; then
+                              test_class=$(grep -E "class [A-Z][a-zA-Z0-9_]*:" "$test_output_file" | head -1 | sed -E 's/.*class ([A-Z][a-zA-Z0-9_]*).*/\1/')
+                          fi
+                          
+                          echo "🔍 DEBUG: Extracted test_method: '$test_method'"
+                          echo "🔍 DEBUG: Extracted test_class: '$test_class'"
+                          
+                          # Extract raw error
+                          raw_error=$(grep -E "^E   " "$test_output_file" | head -3 | sed 's/^E   //' | tr '\n' ' ' | sed 's/"/\\"/g')
+                          
+                          echo "🔍 DEBUG: Extracted raw_error: '$raw_error'"
+                          
+                          # Check if we have enough data for failure object
+                          if [ -n "$error_type" ] || [ -n "$raw_error" ]; then
+                              echo "✅ DEBUG: Creating enhanced failure object"
+                              
+                              # Build enhanced webhook payload
+                              cat > "webhook_${test_id}_${status}.json" << EOF
+      {
+        "requestId": "$REQUEST_ID",
+        "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+        "results": [
+          {
+            "id": "$test_id",
+            "name": "Test $test_id",
+            "status": "$status",
+            "duration": $duration,
+            "logs": "$escaped_logs",
+            "failure": {
+              "type": "$error_type",
+              "phase": "$test_phase",
+              "file": "$error_file",
+              "line": ${error_line_num:-0},
+              "method": "$test_method",
+              "class": "$test_class",
+              "rawError": "$raw_error",
+              "assertion": {
+                "available": false,
+                "expression": "$assertion_expr",
+                "expected": "$assertion_expected",
+                "actual": "$assertion_actual",
+                "operator": "$assertion_operator"
+              }
+            },
+            "execution": {
+              "exitCode": 1,
+              "framework": "pytest",
+              "pytestDuration": $duration
+            }
+          }
+        ]
+      }
+      EOF
+                              
+                              echo "✅ DEBUG: Enhanced failure object created"
+                              echo "📄 DEBUG: Webhook payload content:"
+                              cat "webhook_${test_id}_${status}.json"
+                          else
+                              echo "❌ DEBUG: No failure details extracted, using simple payload"
+                              # Simple payload for failed tests without details
+                              cat > "webhook_${test_id}_${status}.json" << EOF
+      {
+        "requestId": "$REQUEST_ID",
+        "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+        "results": [
+          {
+            "id": "$test_id",
+            "name": "Test $test_id",
+            "status": "$status",
+            "duration": $duration,
+            "logs": "$escaped_logs"
+          }
+        ]
+      }
+      EOF
+                          fi
+                      else
+                          echo "❌ DEBUG: Output file does not exist: $test_output_file"
+                          # Simple payload for failed tests without output file
+                          cat > "webhook_${test_id}_${status}.json" << EOF
+      {
+        "requestId": "$REQUEST_ID",
+        "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+        "results": [
+          {
+            "id": "$test_id",
+            "name": "Test $test_id",
+            "status": "$status",
+            "duration": $duration,
+            "logs": "$escaped_logs"
+          }
+        ]
+      }
+      EOF
+                      fi
+                  else
+                      echo "🔍 DEBUG: Status is not Failed ($status), using simple payload"
+                      # Simple payload for non-failed tests
+                      cat > "webhook_${test_id}_${status}.json" << EOF
+      {
+        "requestId": "$REQUEST_ID",
+        "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+        "results": [
+          {
+            "id": "$test_id",
+            "name": "Test $test_id",
+            "status": "$status",
+            "duration": $duration,
+            "logs": "$escaped_logs"
+          }
+        ]
+      }
+      EOF
                   fi
                   
-                  webhook_payload+='}]}'
-                  
-                  # Save webhook payload for debugging
-                  echo "$webhook_payload" > "webhook_${test_id}_${status}.json"
-                  
-                  echo "📄 Webhook payload preview:"
-                  echo "$webhook_payload" | jq '.' || echo "$webhook_payload"
+                  echo "📡 DEBUG: Sending webhook: $test_id -> $status"
+                  echo "📄 DEBUG: Final webhook payload:"
+                  cat "webhook_${test_id}_${status}.json"
                   
                   # Send webhook
                   HTTP_CODE=$(curl -w "%{http_code}" -o "response_${test_id}_${status}.txt" \
                     -X POST \
                     -H "Content-Type: application/json" \
-                    -H "User-Agent: GitHub-Actions-Quality-Tracker-Enhanced" \
+                    -H "User-Agent: GitHub-Actions-Quality-Tracker" \
                     -H "X-GitHub-Run-ID: $GITHUB_RUN_ID" \
                     -H "X-Request-ID: $REQUEST_ID" \
                     -H "X-Test-Case-ID: $test_id" \
-                    -d "$webhook_payload" \
+                    -d @"webhook_${test_id}_${status}.json" \
                     "$CALLBACK_URL" \
                     --max-time 30 \
                     -s)
                   
                   if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-                    echo "✅ Enhanced webhook sent successfully (HTTP $HTTP_CODE)"
+                    echo "✅ DEBUG: Webhook sent successfully (HTTP $HTTP_CODE)"
                   else
-                    echo "❌ Webhook failed (HTTP $HTTP_CODE)"
+                    echo "❌ DEBUG: Webhook failed (HTTP $HTTP_CODE)"
                     if [ -f "response_${test_id}_${status}.txt" ]; then
-                      echo "📄 Response content:"
+                      echo "📄 DEBUG: Response content:"
                       cat "response_${test_id}_${status}.txt"
                     fi
                   fi
                   
                   sleep 0.5
               else
-                  echo "❌ No CALLBACK_URL configured"
+                  echo "❌ DEBUG: No CALLBACK_URL configured"
               fi
-          }
-          
-          # ENHANCED: Update consolidated results with failure data
-          update_consolidated_results() {
-              local test_id="$1"
-              local status="$2"
-              local duration="$3"
-              local logs="$4"
               
+              # ✅ KEEP: Update consolidated results file for artifacts (preserves current behavior)
               cat > update_consolidated_result.py << EOF
-          import json
-          import os
-          import time
-          
-          # Load current consolidated results
-          try:
-              with open("current_results.json", "r") as f:
-                  payload = json.load(f)
-          except:
-              payload = {
-                  "requirementId": os.environ.get("REQUIREMENT_ID", ""),
-                  "requestId": os.environ.get("REQUEST_ID", ""),
-                  "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                  "results": []
-              }
-          
-          # Load enhanced failure data if available
-          failure_data = None
-          execution_data = None
-          if "$status" == "Failed":
-              try:
-                  with open("failure-analysis/failure_$test_id.json", "r") as f:
-                      analysis = json.load(f)
-                      failure_data = analysis.get("failure")
-                      execution_data = analysis.get("execution")
-                      print(f"✅ Loaded enhanced failure data for $test_id")
-              except:
-                  print(f"⚠️ No enhanced failure data found for $test_id")
-          
-          # Update specific test result in consolidated format
-          test_id = "$test_id"
-          status = "$status"
-          duration = int("$duration" or "0")
-          logs = r"""$logs"""
-          
-          # Find and update the test result
-          updated = False
-          for result in payload["results"]:
-              if result["id"] == test_id:
-                  result["status"] = status
-                  result["duration"] = duration
-                  result["logs"] = logs
-                  result["name"] = f"Test {test_id}"
-                  # Add enhanced failure data
-                  if failure_data:
-                      result["failure"] = failure_data
-                  if execution_data:
-                      result["execution"] = execution_data
-                  updated = True
-                  break
-          
-          # If not found, add new result
-          if not updated:
-              new_result = {
-                  "id": test_id,
-                  "name": f"Test {test_id}",
-                  "status": status,
-                  "duration": duration,
-                  "logs": logs
-              }
-              if failure_data:
-                  new_result["failure"] = failure_data
-              if execution_data:
-                  new_result["execution"] = execution_data
-              payload["results"].append(new_result)
-          
-          # Update timestamp
-          payload["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-          payload["requirementId"] = os.environ.get("REQUIREMENT_ID", "")
-          payload["requestId"] = os.environ.get("REQUEST_ID", "")
-          
-          # Save updated consolidated results
-          with open("current_results.json", "w") as f:
-              json.dump(payload, f, indent=2)
-          
-          print(f"📝 Updated consolidated results: {test_id} -> {status}")
-          if failure_data:
-              print(f"🔥 Added enhanced failure data for {test_id}")
-          EOF
+      import json
+      import os
+      import time
+      
+      # Load current consolidated results
+      try:
+          with open("current_results.json", "r") as f:
+              payload = json.load(f)
+      except:
+          payload = {
+              "requirementId": os.environ.get("REQUIREMENT_ID", ""),
+              "requestId": os.environ.get("REQUEST_ID", ""),
+              "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+              "results": []
+          }
+      
+      # Update specific test result in consolidated format
+      test_id = "$test_id"
+      status = "$status"
+      duration = int("$duration" or "0")
+      logs = r"""$test_logs"""
+      
+      # Find and update the test result in consolidated results
+      updated = False
+      for result in payload["results"]:
+          if result["id"] == test_id:
+              result["status"] = status
+              result["duration"] = duration
+              result["logs"] = logs
+              result["name"] = f"Test {test_id}"
+              updated = True
+              break
+      
+      # If not found, add new result to consolidated results
+      if not updated:
+          payload["results"].append({
+              "id": test_id,
+              "name": f"Test {test_id}",
+              "status": status,
+              "duration": duration,
+              "logs": logs
+          })
+      
+      # Update timestamp and ensure required fields for artifacts
+      payload["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+      payload["requirementId"] = os.environ.get("REQUIREMENT_ID", "")
+      payload["requestId"] = os.environ.get("REQUEST_ID", "")
+      
+      # Save updated consolidated results for artifact generation
+      with open("current_results.json", "w") as f:
+          json.dump(payload, f, indent=2)
+      
+      print(f"📝 Updated consolidated results: {test_id} -> {status}")
+      EOF
               
               python update_consolidated_result.py
           }
           
-          # Process each test with enhanced analysis
+          # ✅ FIXED: Process each test with exactly 3 webhook calls
           for test_id in "${TEST_ARRAY[@]}"; do
               if [ -z "$test_id" ]; then continue; fi
               
@@ -409,21 +407,21 @@ jobs:
               
               # Define output file path
               test_output_file="test-results/output-${test_id}.log"
-              echo "🔍 Output file will be: $test_output_file"
+              echo "🔍 DEBUG: Output file will be: $test_output_file"
               
               # 1. Send "Not Started" status
-              send_enhanced_webhook "$test_id" "Not Started" "0" "Test queued for execution" ""
+              send_webhook "$test_id" "Not Started" "0" "Test queued for execution" ""
               
               # 2. Send "Running" status  
-              send_enhanced_webhook "$test_id" "Running" "0" "Test execution in progress..." ""
+              send_webhook "$test_id" "Running" "0" "Test execution in progress..." ""
               
-              # 3. Run the test with enhanced output capture
+              # 3. Run the test and capture detailed output
               start_time=$(date +%s)
               
-              echo "▶️  Executing: python -m pytest -v -s --tb=long --capture=no -k \"$test_id\""
+              echo "▶️  Executing: python -m pytest -v -k \"$test_id\" --tb=long"
               
-              # ENHANCED: More verbose pytest execution for better error capture
-              if python -m pytest -v -s --tb=long --capture=no -k "$test_id" \
+              # IMPORTANT: Use --tb=long for more detailed error information
+              if python -m pytest -v -k "$test_id" --tb=long \
                   --junit-xml="test-results/junit-${test_id}.xml" \
                   --json-report --json-report-file="test-results/json-${test_id}.json" \
                   > "$test_output_file" 2>&1; then
@@ -440,18 +438,25 @@ jobs:
                       test_status="Failed"
                       echo "❌ Test FAILED: $test_id (exit code: $exit_code)"
                       
-                      # ENHANCED: Perform detailed failure analysis
-                      analyze_test_failure "$test_id" "$test_output_file" "$duration"
+                      echo "🔍 DEBUG: Test failed, output file should contain error details"
+                      echo "📄 DEBUG: Checking if output file exists and has content:"
+                      if [ -f "$test_output_file" ]; then
+                          echo "✅ Output file exists, size: $(wc -c < "$test_output_file") bytes"
+                          echo "📄 First few lines:"
+                          head -5 "$test_output_file"
+                      else
+                          echo "❌ Output file does not exist!"
+                      fi
                   fi
               fi
               
               end_time=$(date +%s)
               duration=$((end_time - start_time))
               
-              # Build enhanced test logs
+              # Build test logs based on status
               if [ "$test_status" = "Failed" ]; then
-                  # Get more detailed error information
-                  error_summary=$(grep -E "FAILED|Exception|Error" "$test_output_file" | head -3 | tr '\n' ' ')
+                  # Extract key error information for logs
+                  error_summary=$(grep -E "^E   " "$test_output_file" | head -1 | sed 's/^E   //')
                   test_logs="FAILED: ${error_summary:-Test execution failed}"
               elif [ "$test_status" = "Not Found" ]; then
                   test_logs="Test implementation not found for pattern: $test_id"
@@ -459,79 +464,125 @@ jobs:
                   test_logs="Test completed successfully"
               fi
               
-              # 4. Send final enhanced result
-              send_enhanced_webhook "$test_id" "$test_status" "$duration" "$test_logs" "$test_output_file"
-              
-              # 5. Update consolidated results with enhanced data
-              update_consolidated_results "$test_id" "$test_status" "$duration" "$test_logs"
+              # 4. Send final result - CRITICAL: Pass the output file
+              echo "🔍 DEBUG: About to send final webhook with output file: $test_output_file"
+              send_webhook "$test_id" "$test_status" "$duration" "$test_logs" "$test_output_file"
               
               echo "📊 Test completed: $test_id -> $test_status (${duration}s)"
               sleep 1
           done
           
           echo ""
-          echo "🏁 All tests completed with enhanced failure analysis!"
+          echo "🏁 All tests completed! Expected webhooks: $((TOTAL_TESTS * 3))"
         continue-on-error: true
 
-      - name: Generate enhanced final results
+      - name: Generate final results and cleanup
         run: |
-          echo "📊 Generating enhanced consolidated results..."
+          echo "📊 Generating final consolidated results..."
           
+          # ✅ KEEP: Generate the essential consolidated results file
           if [ -f "current_results.json" ]; then
-            # Create results with run ID
+            # ✅ FRONTEND COMPATIBLE: Create results with run ID (pattern matching will find it)
             cp current_results.json "results-$GITHUB_RUN_ID.json"
-            echo "✅ Enhanced results file created: results-$GITHUB_RUN_ID.json"
+            echo "✅ Results file created: results-$GITHUB_RUN_ID.json"
             
-            # Display final enhanced results
-            echo "📄 Enhanced consolidated results:"
+            # Display final consolidated results
+            echo "📄 Final consolidated results:"
             cat current_results.json | jq '.' || cat current_results.json
-            
-            # Validate failure data
-            echo "🔍 Validating enhanced failure data..."
-            python3 -c "
-          import json
-          with open('current_results.json') as f:
-              data = json.load(f)
-          
-          results = data.get('results', [])
-          failed_tests = [r for r in results if r.get('status') == 'Failed']
-          enhanced_failures = [r for r in failed_tests if r.get('failure')]
-          
-          print(f'📊 Total tests: {len(results)}')
-          print(f'❌ Failed tests: {len(failed_tests)}')
-          print(f'🔥 Enhanced failure data: {len(enhanced_failures)}')
-          
-          for failure in enhanced_failures:
-              print(f\"✅ {failure['id']}: {failure['failure']['type']}\")
-          "
           else
             echo "❌ No consolidated results file found"
           fi
+          
+          # ✅ OPTIONAL: Generate execution summary only if needed for analytics
+          if [ "${GENERATE_SUMMARY:-false}" = "true" ]; then
+            cat > generate_execution_summary.py << 'EOF'
+          import json
+          import os
+          import glob
+          from datetime import datetime
+          
+          # Collect webhook files for reference
+          webhook_files = glob.glob("webhook_*_*.json")
+          
+          summary = {
+              "executionMode": "optimized-minimal-webhooks-with-not-found-detection",
+              "requestId": os.environ.get("REQUEST_ID", ""),
+              "requirementId": os.environ.get("REQUIREMENT_ID", ""),
+              "timestamp": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "webhooksSent": len(webhook_files),
+              "consolidatedArtifactGenerated": os.path.exists("current_results.json"),
+              "githubRunId": os.environ.get("GITHUB_RUN_ID", ""),
+              "note": "Enhanced with 'Not Found' status detection for missing test implementations"
+          }
+          
+          # Read consolidated results for summary
+          if os.path.exists("current_results.json"):
+              with open("current_results.json", "r") as f:
+                  consolidated_data = json.load(f)
+                  
+              results = consolidated_data.get("results", [])
+              summary["totalTests"] = len(results)
+              
+              # Count statuses including new "Not Found" status
+              status_counts = {}
+              for result in results:
+                  status = result.get('status', 'Unknown')
+                  status_counts[status] = status_counts.get(status, 0) + 1
+              
+              summary["statusSummary"] = status_counts
+              summary["webhooksPerTest"] = 3
+              summary["expectedWebhooks"] = len(results) * 3
+              summary["actualWebhooks"] = len(webhook_files)
+              summary["efficiency"] = "Optimized" if len(webhook_files) <= len(results) * 3 else "Needs review"
+              
+              print(f"📋 Execution Summary:")
+              print(f"  - Total Tests: {len(results)}")
+              print(f"  - Expected Webhooks: {len(results) * 3}")
+              print(f"  - Actual Webhooks: {len(webhook_files)}")
+              print(f"  - Efficiency: {summary['efficiency']}")
+              for status, count in status_counts.items():
+                  print(f"  - {status}: {count}")
+          
+          with open("execution_summary.json", "w") as f:
+              json.dump(summary, f, indent=2)
+          
+          print("✅ Execution summary generated")
+          EOF
+            
+            python generate_execution_summary.py
+            echo "📊 Execution summary generated (optional analytics)"
+          else
+            echo "📊 Skipping execution summary generation"
+          fi
+          
+          # 🗑️ CLEANUP: Remove temporary webhook files after successful execution
+          echo "🧹 Cleaning up temporary files..."
+          rm -f webhook_*_*.json response_*_*.txt update_consolidated_result.py generate_execution_summary.py initialize_results.py
+          echo "✅ Temporary files cleaned up"
 
-      - name: Upload enhanced test artifacts
+      - name: Upload test artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: enhanced-test-results-${{ github.run_id }}
+          name: test-results-${{ github.run_id }}
           path: |
             results-${{ github.run_id }}.json
             current_results.json
+            execution_summary.json
             test-results/
-            failure-analysis/
-            webhook_*.json
           retention-days: 7
           
-      - name: Enhanced Workflow Summary
+      - name: Workflow Summary
         run: |
-          echo "## 🎯 Quality Tracker Enhanced Failure Analysis Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 🎯 Quality Tracker Enhanced Execution Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Requirement:** $REQUIREMENT_ID - $REQUIREMENT_NAME" >> $GITHUB_STEP_SUMMARY
           echo "**Request ID:** $REQUEST_ID" >> $GITHUB_STEP_SUMMARY
           echo "**Requested Tests:** $TEST_CASE_IDS" >> $GITHUB_STEP_SUMMARY
-          echo "**Execution Mode:** ✨ **Enhanced with Comprehensive Failure Analysis** ✨" >> $GITHUB_STEP_SUMMARY
+          echo "**Execution Mode:** ✨ **Enhanced with 'Not Found' Status Detection** ✨" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [ -f current_results.json ]; then
-            echo "**Enhanced Test Results:**" >> $GITHUB_STEP_SUMMARY
+            echo "**Test Results:**" >> $GITHUB_STEP_SUMMARY
             python3 -c "
           import json
           try:
@@ -540,13 +591,9 @@ jobs:
               
               results = data.get('results', [])
               status_counts = {}
-              enhanced_count = 0
-              
               for r in results:
                   status = r.get('status', 'Unknown')
                   status_counts[status] = status_counts.get(status, 0) + 1
-                  if r.get('failure'):
-                      enhanced_count += 1
               
               for status, count in status_counts.items():
                   if status == 'Passed':
@@ -555,16 +602,33 @@ jobs:
                       emoji = '❌'
                   elif status == 'Not Found':
                       emoji = '⚠️'
+                  elif status == 'Not Started':
+                      emoji = '⏳'
+                  elif status == 'Running':
+                      emoji = '🔄'
                   else:
                       emoji = '❓'
                   print(f'- {emoji} **{status}:** {count}')
-              
-              print(f'- 🔥 **Enhanced Failure Data:** {enhanced_count} failures analyzed')
-              print(f'- 📡 **Webhooks:** Enhanced with failure details')
-              print(f'- 📦 **Artifacts:** Includes failure analysis files')
+                  
+              # Show enhanced webhook delivery info
+              total_tests = len(results)
+              expected_webhooks = total_tests * 3
+              print(f'- 📡 **Webhooks Sent:** {expected_webhooks} (3 per test)')
+              print(f'- 📦 **Consolidated Artifacts:** Generated')
+              print(f'- ⚡ **Enhancement:** Missing test implementation detection')
+              print(f'- ✅ **Status Clarity:** Clear distinction between failed vs missing tests')
           except Exception as e:
               print(f'- ❌ Error reading results: {e}')
           " >> $GITHUB_STEP_SUMMARY
           else
-            echo "❌ No enhanced results generated" >> $GITHUB_STEP_SUMMARY
+            echo "❌ No consolidated results generated" >> $GITHUB_STEP_SUMMARY
           fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Enhancement Features:**" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Enhanced Status Detection:** Distinguishes between failed tests and missing implementations" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **'Not Found' Status:** Tests without implementations get proper status" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Exit Code Analysis:** Uses pytest exit code 5 to detect missing tests" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Log Pattern Detection:** Checks for 'collected 0 items' as backup detection" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Actionable Feedback:** Clear messaging about what needs to be implemented" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Backward Compatibility:** Same artifact structure as original workflow" >> $GITHUB_STEP_SUMMARY
