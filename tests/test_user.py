@@ -19,18 +19,8 @@ class TestOpenCart:
         driver.quit()
     
     
-    def test_homepage_loads_TC_001(self, browser):
-        """[TC-001] Test that the homepage loads successfully and contains expected elements"""
-        # Check that the title is not empty (more flexible than checking for specific text)
-        assert browser.title, "Page title should not be empty"
-        
-        # Check if the search box exists
-        search_box = browser.find_element(By.NAME, "search")
-        assert search_box.is_displayed(), "Search box should be displayed"
-        
-        # Check if the content area exists (should exist in all OpenCart installations)
-        content = browser.find_element(By.ID, "content")
-        assert content.is_displayed(), "Content area should be displayed"
+    def test_homepage_loads_TC_001(self):       
+        assert 1==2
     
     def test_product_search_TC_002(self, browser):
         """[TC-002] Test the product search functionality"""
