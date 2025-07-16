@@ -1,0 +1,640 @@
+name: Quality Tracker Test Execution - Phase 1 Clean
+
+on:
+  repository_dispatch:
+    types: [quality-tracker-test-run]
+
+jobs:
+  run-tests:
+    runs-on: ubuntu-latest
+    env:
+      REQUIREMENT_ID: ${{ github.event.client_payload.requirementId }}
+      REQUIREMENT_NAME: ${{ github.event.client_payload.requirementName }}
+      TEST_CASE_IDS: ${{ join(github.event.client_payload.testCases, ' ') }}
+      CALLBACK_URL: ${{ github.event.client_payload.callbackUrl }}
+      GITHUB_RUN_ID: ${{ github.run_id }}
+      REQUEST_ID: ${{ github.event.client_payload.requestId }}
+      
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-html pytest-json-report
+          pip install selenium webdriver-manager
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+      
+      - name: Display execution info
+        run: |
+          echo "🎯 Requirement: $REQUIREMENT_ID - $REQUIREMENT_NAME"
+          echo "📋 Test Cases: $TEST_CASE_IDS"
+          echo "🔗 GitHub Run ID: $GITHUB_RUN_ID"
+          echo "📝 Request ID: $REQUEST_ID"
+          echo "📡 Callback URL: $CALLBACK_URL"
+          echo "✨ Phase 1: Raw data only - frontend parsing"
+
+      - name: Initialize results
+        run: |
+          python3 -c "
+          import json
+          import os
+          import time
+
+          test_ids = os.environ.get('TEST_CASE_IDS', '').split()
+          results = []
+
+          for test_id in test_ids:
+              if test_id.strip():
+                  results.append({
+                      'id': test_id.strip(),
+                      'name': f'Test {test_id.strip()}',
+                      'status': 'Not Started',
+                      'duration': 0,
+                      'logs': '',
+                      'rawOutput': '',
+                      'errorStack': []
+                  })
+
+          payload = {
+              'requirementId': os.environ.get('REQUIREMENT_ID', ''),
+              'requestId': os.environ.get('REQUEST_ID', ''),
+              'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+              'results': results
+          }
+
+          with open('current_results.json', 'w') as f:
+              json.dump(payload, f, indent=2)
+
+          print(f'📋 Initialized {len(results)} test results')
+          "
+
+      - name: Run tests
+        run: |
+          echo "🚀 Starting test execution..."
+          
+          # Parse test IDs
+          IFS=' ' read -ra TEST_ARRAY <<< "$TEST_CASE_IDS"
+          TOTAL_TESTS=${#TEST_ARRAY[@]}
+          
+          echo "📊 Total tests: $TOTAL_TESTS"
+          mkdir -p test-results
+          
+          # Webhook sender function
+          send_webhook() {
+              local test_id="$1"
+              local status="$2"
+              local duration="$3"
+              local raw_output="$4"
+              local error_stack="$5"
+              
+              echo "📡 Webhook: $test_id -> $status"
+              
+              if [ -n "$CALLBACK_URL" ]; then
+                  # Create webhook payload with error stack
+                  python3 -c "
+          import json
+          import os
+          import time
+
+          # Parse error stack if provided
+          error_stack_data = []
+          if '$error_stack' and '$error_stack' != '[]':
+              try:
+                  error_stack_data = json.loads('''$error_stack''')
+              except:
+                  error_stack_data = []
+
+          data = {
+              'requestId': os.environ.get('REQUEST_ID', ''),
+              'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+              'results': [{
+                  'id': '$test_id',
+                  'name': 'Test $test_id',
+                  'status': '$status',
+                  'duration': $duration,
+                  'logs': 'Test execution info',
+                  'rawOutput': '''$raw_output''',
+                  'errorStack': error_stack_data
+              }]
+          }
+
+          with open('webhook_${test_id}_${status}.json', 'w') as f:
+              json.dump(data, f, indent=2)
+          "
+                  
+                  # Send webhook
+                  HTTP_CODE=$(curl -w "%{http_code}" -o "response_${test_id}_${status}.txt" \
+                    -X POST \
+                    -H "Content-Type: application/json" \
+                    -H "User-Agent: GitHub-Actions-Quality-Tracker" \
+                    -H "X-GitHub-Run-ID: $GITHUB_RUN_ID" \
+                    -H "X-Request-ID: $REQUEST_ID" \
+                    -d @"webhook_${test_id}_${status}.json" \
+                    "$CALLBACK_URL" \
+                    --max-time 30 \
+                    -s)
+                  
+                  if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+                    echo "✅ Webhook sent (HTTP $HTTP_CODE)"
+                  else
+                    echo "❌ Webhook failed (HTTP $HTTP_CODE)"
+                  fi
+                  
+                  sleep 0.5
+              else
+                  echo "❌ No CALLBACK_URL configured"
+              fi
+              
+              # Update consolidated results
+              python3 -c "
+          import json
+          import os
+          import time
+
+          try:
+              with open('current_results.json', 'r') as f:
+                  payload = json.load(f)
+          except:
+              payload = {
+                  'requirementId': os.environ.get('REQUIREMENT_ID', ''),
+                  'requestId': os.environ.get('REQUEST_ID', ''),
+                  'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+                  'results': []
+              }
+
+          test_id = '$test_id'
+          status = '$status'
+          duration = $duration
+          raw_output = '''$raw_output'''
+          
+          # Parse error stack if provided
+          error_stack_data = []
+          if '$error_stack' and '$error_stack' != '[]':
+              try:
+                  error_stack_data = json.loads('''$error_stack''')
+              except:
+                  error_stack_data = []
+
+          # Update or add result
+          updated = False
+          for result in payload['results']:
+              if result['id'] == test_id:
+                  result['status'] = status
+                  result['duration'] = duration
+                  result['logs'] = f'Test {status.lower()}'
+                  result['rawOutput'] = raw_output
+                  result['errorStack'] = error_stack_data
+                  updated = True
+                  break
+
+          if not updated:
+              payload['results'].append({
+                  'id': test_id,
+                  'name': f'Test {test_id}',
+                  'status': status,
+                  'duration': duration,
+                  'logs': f'Test {status.lower()}',
+                  'rawOutput': raw_output,
+                  'errorStack': error_stack_data
+              })
+
+          payload['timestamp'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+
+          with open('current_results.json', 'w') as f:
+              json.dump(payload, f, indent=2)
+
+          print(f'📝 Updated: {test_id} -> {status}')
+          "
+          }
+          
+          # Process each test
+          CURRENT_TEST=0
+          for test_id in "${TEST_ARRAY[@]}"; do
+              if [ -z "$test_id" ]; then continue; fi
+              
+              CURRENT_TEST=$((CURRENT_TEST + 1))
+              echo ""
+              echo "🧪 [$CURRENT_TEST/$TOTAL_TESTS] Test: $test_id"
+              
+              output_file="test-results/output-${test_id}.log"
+              
+              # 1. Not Started
+              send_webhook "$test_id" "Not Started" "0" "" "[]"
+              
+              # 2. Running
+              send_webhook "$test_id" "Running" "0" "" "[]"
+              
+              # 3. Execute test
+              start_time=$(date +%s)
+              echo "▶️ pytest -v -k \"$test_id\" --tb=long"
+              
+              if python -m pytest -v -k "$test_id" --tb=long \
+                  --junit-xml="test-results/junit-${test_id}.xml" \
+                  --json-report --json-report-file="test-results/json-${test_id}.json" \
+                  > "$output_file" 2>&1; then
+                  
+                  test_status="Passed"
+                  echo "✅ PASSED: $test_id"
+              else
+                  exit_code=$?
+                  
+                  if [ $exit_code -eq 5 ] || grep -q "collected 0 items" "$output_file"; then
+                      test_status="Not Found"
+                      echo "⚠️ NOT FOUND: $test_id"
+                  else
+                      test_status="Failed"
+                      echo "❌ FAILED: $test_id (exit: $exit_code)"
+                  fi
+              fi
+              
+              end_time=$(date +%s)
+              duration=$((end_time - start_time))
+              
+              # Read raw output and extract stack trace
+              raw_output=""
+              error_stack=""
+              if [ -f "$output_file" ]; then
+                  # Get raw output and error stack in one Python call
+                  output_data=$(python3 -c "
+          import json
+          import re
+          
+          try:
+              with open('$output_file', 'r', encoding='utf-8', errors='replace') as f:
+                  content = f.read()
+              
+              # Limit raw output size
+              raw_output = content
+              if len(content) > 50000:
+                  raw_output = content[:50000] + '\\n\\n[OUTPUT TRUNCATED]'
+              
+              # Extract generic error stack trace
+              error_stack = []
+              
+              # Generic patterns for stack traces (framework agnostic)
+              stack_patterns = [
+                  # Python traceback format
+                  r'Traceback \(most recent call last\):(.*?)(?=\\n\\n|\\n[A-Z]|$)',
+                  # File location patterns
+                  r'File \"([^\"]+)\", line (\d+), in ([^\\n]+)',
+                  # pytest format
+                  r'(tests/[^:]+\.py):(\d+): in ([^\\n]+)',
+                  # Java stack trace
+                  r'at ([^\\n]+)\\(([^:]+):(\d+)\\)',
+                  # JavaScript stack trace
+                  r'at ([^\\n]+) \\(([^:]+):(\d+):(\d+)\\)',
+                  # Generic error lines starting with common prefixes
+                  r'^\\s*(E\\s+|ERROR\\s+|FAIL\\s+|>\\s+)(.+)
+              
+              # 4. Final result with error stack
+              send_webhook "$test_id" "$test_status" "$duration" "$raw_output" "$error_stack"
+              
+              echo "📊 Completed: $test_id -> $test_status (${duration}s)"
+              sleep 1
+          done
+          
+          echo ""
+          echo "🏁 All tests completed! Webhooks sent: $((TOTAL_TESTS * 3))"
+        continue-on-error: true
+
+      - name: Generate final results
+        run: |
+          echo "📊 Generating final results..."
+          
+          if [ -f "current_results.json" ]; then
+            cp current_results.json "results-$GITHUB_RUN_ID.json"
+            echo "✅ Results: results-$GITHUB_RUN_ID.json"
+            
+            echo "📄 Final results:"
+            cat current_results.json | jq '.' || cat current_results.json
+          else
+            echo "❌ No results file found"
+          fi
+          
+          # Generate summary
+          python3 -c "
+          import json
+          import os
+          from datetime import datetime
+
+          summary = {
+              'executionMode': 'phase1-raw-data',
+              'requestId': os.environ.get('REQUEST_ID', ''),
+              'requirementId': os.environ.get('REQUIREMENT_ID', ''),
+              'timestamp': datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+              'githubRunId': os.environ.get('GITHUB_RUN_ID', ''),
+              'note': 'Phase 1: Raw data capture for frontend parsing'
+          }
+
+          if os.path.exists('current_results.json'):
+              with open('current_results.json', 'r') as f:
+                  data = json.load(f)
+                  
+              results = data.get('results', [])
+              summary['totalTests'] = len(results)
+              
+              status_counts = {}
+              for result in results:
+                  status = result.get('status', 'Unknown')
+                  status_counts[status] = status_counts.get(status, 0) + 1
+              
+              summary['statusSummary'] = status_counts
+              summary['webhooksPerTest'] = 3
+              summary['totalWebhooks'] = len(results) * 3
+              
+              print(f'📋 Summary:')
+              print(f'  Total Tests: {len(results)}')
+              print(f'  Total Webhooks: {len(results) * 3}')
+              for status, count in status_counts.items():
+                  print(f'  {status}: {count}')
+
+          with open('execution_summary.json', 'w') as f:
+              json.dump(summary, f, indent=2)
+
+          print('✅ Summary generated')
+          "
+          
+          # Cleanup
+          echo "🧹 Cleaning up..."
+          rm -f webhook_*.json response_*.txt
+          echo "✅ Cleanup done"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ github.run_id }}
+          path: |
+            results-${{ github.run_id }}.json
+            current_results.json
+            execution_summary.json
+            test-results/
+          retention-days: 7
+          
+      - name: Summary
+        run: |
+          echo "## 🎯 Phase 1 Test Execution Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Requirement:** $REQUIREMENT_ID - $REQUIREMENT_NAME" >> $GITHUB_STEP_SUMMARY
+          echo "**Request ID:** $REQUEST_ID" >> $GITHUB_STEP_SUMMARY
+          echo "**Test Cases:** $TEST_CASE_IDS" >> $GITHUB_STEP_SUMMARY
+          echo "**Mode:** Phase 1 - Raw data capture" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f current_results.json ]; then
+            echo "**Results:**" >> $GITHUB_STEP_SUMMARY
+            python3 -c "
+          import json
+          try:
+              with open('current_results.json') as f:
+                  data = json.load(f)
+              
+              results = data.get('results', [])
+              status_counts = {}
+              for r in results:
+                  status = r.get('status', 'Unknown')
+                  status_counts[status] = status_counts.get(status, 0) + 1
+              
+              for status, count in status_counts.items():
+                  emoji = {
+                      'Passed': '✅',
+                      'Failed': '❌', 
+                      'Not Found': '⚠️',
+                      'Not Started': '⏳',
+                      'Running': '🔄'
+                  }.get(status, '❓')
+                  print(f'- {emoji} **{status}:** {count}')
+                  
+              print(f'- 📡 **Webhooks:** {len(results) * 3} (3 per test)')
+              print(f'- 📦 **Raw Data:** Captured for frontend parsing')
+              print(f'- ⚡ **Phase 1:** Simplified workflow execution')
+          except Exception as e:
+              print(f'- ❌ Error: {e}')
+          " >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ No results generated" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Phase 1 Features:**" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Simplified:** Focus on execution only" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Framework Agnostic:** No parsing assumptions" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Raw Output:** Complete test output preserved" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Frontend Parsing:** Deterministic error analysis" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Faster:** Reduced processing overhead" >> $GITHUB_STEP_SUMMARY
+              ]
+              
+              lines = content.split('\\n')
+              
+              # Extract stack trace lines
+              for i, line in enumerate(lines):
+                  # Look for file locations with line numbers
+                  file_match = re.search(r'([^\\s]+\\.(?:py|js|java|cs|rb|php|go|ts|jsx|tsx)):(\d+)', line)
+                  if file_match:
+                      error_stack.append({
+                          'type': 'location',
+                          'file': file_match.group(1),
+                          'line': int(file_match.group(2)),
+                          'text': line.strip()
+                      })
+                  
+                  # Look for error/exception lines
+                  elif re.match(r'^\\s*(E\\s+|ERROR\\s+|FAIL\\s+|>\\s+)', line):
+                      error_stack.append({
+                          'type': 'error',
+                          'text': line.strip()
+                      })
+                  
+                  # Look for exception declarations
+                  elif re.search(r'([A-Z][a-zA-Z0-9]*(?:Exception|Error)):', line):
+                      error_stack.append({
+                          'type': 'exception',
+                          'text': line.strip()
+                      })
+              
+              # Limit stack trace entries
+              if len(error_stack) > 20:
+                  error_stack = error_stack[:20]
+              
+              # Escape for shell
+              raw_output = raw_output.replace('\\\\', '\\\\\\\\').replace(\"'\", \"'\\\"'\\\"'\")
+              
+              # Output as JSON for easy parsing
+              result = {
+                  'rawOutput': raw_output,
+                  'errorStack': error_stack
+              }
+              
+              print(json.dumps(result))
+              
+          except Exception as e:
+              # Fallback
+              print(json.dumps({
+                  'rawOutput': f'Error reading file: {e}',
+                  'errorStack': []
+              }))
+          ")
+                  
+                  # Parse the JSON output
+                  raw_output=$(echo "$output_data" | python3 -c "
+          import json
+          import sys
+          try:
+              data = json.load(sys.stdin)
+              print(data['rawOutput'])
+          except:
+              print('Error parsing output data')
+          ")
+                  
+                  error_stack=$(echo "$output_data" | python3 -c "
+          import json
+          import sys
+          try:
+              data = json.load(sys.stdin)
+              print(json.dumps(data['errorStack']))
+          except:
+              print('[]')
+          ")
+              fi
+              
+              # 4. Final result
+              send_webhook "$test_id" "$test_status" "$duration" "$raw_output"
+              
+              echo "📊 Completed: $test_id -> $test_status (${duration}s)"
+              sleep 1
+          done
+          
+          echo ""
+          echo "🏁 All tests completed! Webhooks sent: $((TOTAL_TESTS * 3))"
+        continue-on-error: true
+
+      - name: Generate final results
+        run: |
+          echo "📊 Generating final results..."
+          
+          if [ -f "current_results.json" ]; then
+            cp current_results.json "results-$GITHUB_RUN_ID.json"
+            echo "✅ Results: results-$GITHUB_RUN_ID.json"
+            
+            echo "📄 Final results:"
+            cat current_results.json | jq '.' || cat current_results.json
+          else
+            echo "❌ No results file found"
+          fi
+          
+          # Generate summary
+          python3 -c "
+          import json
+          import os
+          from datetime import datetime
+
+          summary = {
+              'executionMode': 'phase1-raw-data',
+              'requestId': os.environ.get('REQUEST_ID', ''),
+              'requirementId': os.environ.get('REQUIREMENT_ID', ''),
+              'timestamp': datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+              'githubRunId': os.environ.get('GITHUB_RUN_ID', ''),
+              'note': 'Phase 1: Raw data capture for frontend parsing'
+          }
+
+          if os.path.exists('current_results.json'):
+              with open('current_results.json', 'r') as f:
+                  data = json.load(f)
+                  
+              results = data.get('results', [])
+              summary['totalTests'] = len(results)
+              
+              status_counts = {}
+              for result in results:
+                  status = result.get('status', 'Unknown')
+                  status_counts[status] = status_counts.get(status, 0) + 1
+              
+              summary['statusSummary'] = status_counts
+              summary['webhooksPerTest'] = 3
+              summary['totalWebhooks'] = len(results) * 3
+              
+              print(f'📋 Summary:')
+              print(f'  Total Tests: {len(results)}')
+              print(f'  Total Webhooks: {len(results) * 3}')
+              for status, count in status_counts.items():
+                  print(f'  {status}: {count}')
+
+          with open('execution_summary.json', 'w') as f:
+              json.dump(summary, f, indent=2)
+
+          print('✅ Summary generated')
+          "
+          
+          # Cleanup
+          echo "🧹 Cleaning up..."
+          rm -f webhook_*.json response_*.txt
+          echo "✅ Cleanup done"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ github.run_id }}
+          path: |
+            results-${{ github.run_id }}.json
+            current_results.json
+            execution_summary.json
+            test-results/
+          retention-days: 7
+          
+      - name: Summary
+        run: |
+          echo "## 🎯 Phase 1 Test Execution Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Requirement:** $REQUIREMENT_ID - $REQUIREMENT_NAME" >> $GITHUB_STEP_SUMMARY
+          echo "**Request ID:** $REQUEST_ID" >> $GITHUB_STEP_SUMMARY
+          echo "**Test Cases:** $TEST_CASE_IDS" >> $GITHUB_STEP_SUMMARY
+          echo "**Mode:** Phase 1 - Raw data capture" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f current_results.json ]; then
+            echo "**Results:**" >> $GITHUB_STEP_SUMMARY
+            python3 -c "
+          import json
+          try:
+              with open('current_results.json') as f:
+                  data = json.load(f)
+              
+              results = data.get('results', [])
+              status_counts = {}
+              for r in results:
+                  status = r.get('status', 'Unknown')
+                  status_counts[status] = status_counts.get(status, 0) + 1
+              
+              for status, count in status_counts.items():
+                  emoji = {
+                      'Passed': '✅',
+                      'Failed': '❌', 
+                      'Not Found': '⚠️',
+                      'Not Started': '⏳',
+                      'Running': '🔄'
+                  }.get(status, '❓')
+                  print(f'- {emoji} **{status}:** {count}')
+                  
+              print(f'- 📡 **Webhooks:** {len(results) * 3} (3 per test)')
+              print(f'- 📦 **Raw Data:** Captured for frontend parsing')
+              print(f'- ⚡ **Phase 1:** Simplified workflow execution')
+          except Exception as e:
+              print(f'- ❌ Error: {e}')
+          " >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ No results generated" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Phase 1 Features:**" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Simplified:** Focus on execution only" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Framework Agnostic:** No parsing assumptions" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Raw Output:** Complete test output preserved" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Frontend Parsing:** Deterministic error analysis" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Faster:** Reduced processing overhead" >> $GITHUB_STEP_SUMMARY
