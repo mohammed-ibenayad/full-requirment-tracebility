@@ -95,7 +95,7 @@ jobs:
           # Create test results directory
           mkdir -p test-results
           
-          # SIMPLIFIED: Basic webhook function - only sends raw data
+          # Fix 3: Simplified send_webhook Function
           send_webhook() {
               local test_id="$1"
               local status="$2"
@@ -105,23 +105,8 @@ jobs:
               echo "📡 Sending webhook: $test_id -> $status"
               
               if [ -n "$CALLBACK_URL" ]; then
-                  # SIMPLIFIED: No parsing, just raw data
-                  cat > "webhook_${test_id}_${status}.json" << EOF
-          {
-            "requestId": "$REQUEST_ID",
-            "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
-            "results": [
-              {
-                "id": "$test_id",
-                "name": "Test $test_id",
-                "status": "$status",
-                "duration": $duration,
-                "logs": "Basic execution info",
-                "rawOutput": $(echo "$raw_output" | jq -Rs .)
-              }
-            ]
-          }
-          EOF
+                  # Create webhook payload with proper JSON escaping
+                  python3 -c "import json; import sys; import os; data = { 'requestId': os.environ.get('REQUEST_ID', ''), 'timestamp': '$(date -u +"%Y-%m-%dT%H:%M:%SZ")', 'results': [{'id': '$test_id', 'name': 'Test $test_id', 'status': '$status', 'duration': $duration, 'logs': 'Basic execution info', 'rawOutput': '''$raw_output'''}]}; with open('webhook_${test_id}_${status}.json', 'w') as f: json.dump(data, f, indent=2);"
                   
                   # Send webhook
                   HTTP_CODE=$(curl -w "%{http_code}" -o "response_${test_id}_${status}.txt" \
@@ -147,58 +132,8 @@ jobs:
                   echo "❌ No CALLBACK_URL configured"
               fi
               
-              # Update consolidated results for artifacts
-              cat > update_consolidated_result.py << EOF
-          import json
-          import os
-          import time
-          
-          try:
-              with open("current_results.json", "r") as f:
-                  payload = json.load(f)
-          except:
-              payload = {
-                  "requirementId": os.environ.get("REQUIREMENT_ID", ""),
-                  "requestId": os.environ.get("REQUEST_ID", ""),
-                  "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                  "results": []
-              }
-          
-          test_id = "$test_id"
-          status = "$status"
-          duration = int("$duration" or "0")
-          raw_output = r"""$raw_output"""
-          
-          # Update test result
-          updated = False
-          for result in payload["results"]:
-              if result["id"] == test_id:
-                  result["status"] = status
-                  result["duration"] = duration
-                  result["logs"] = f"Test {status.lower()}"
-                  result["rawOutput"] = raw_output
-                  updated = True
-                  break
-          
-          if not updated:
-              payload["results"].append({
-                  "id": test_id,
-                  "name": f"Test {test_id}",
-                  "status": status,
-                  "duration": duration,
-                  "logs": f"Test {status.lower()}",
-                  "rawOutput": raw_output
-              })
-          
-          payload["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-          
-          with open("current_results.json", "w") as f:
-              json.dump(payload, f, indent=2)
-          
-          print(f"📝 Updated results: {test_id} -> {status}")
-          EOF
-              
-              python update_consolidated_result.py
+              # Update consolidated results
+              python3 -c "import json; import os; import time; try: with open('current_results.json', 'r') as f: payload = json.load(f); except: payload = { 'requirementId': os.environ.get('REQUIREMENT_ID', ''), 'requestId': os.environ.get('REQUEST_ID', ''), 'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'results': [] }; test_id = '$test_id'; status = '$status'; duration = $duration; raw_output = '''$raw_output'''; updated = False; for result in payload['results']: if result['id'] == test_id: result['status'] = status; result['duration'] = duration; result['logs'] = f'Test {status.lower()}'; result['rawOutput'] = raw_output; updated = True; break; if not updated: payload['results'].append({'id': test_id, 'name': f'Test {test_id}', 'status': status, 'duration': duration, 'logs': f'Test {status.lower()}', 'rawOutput': raw_output}); payload['timestamp'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()); with open('current_results.json', 'w') as f: json.dump(payload, f, indent=2); print(f'Updated results: {test_id} -> {status}');"
           }
           
           # SIMPLIFIED: Process each test with 3 webhook calls (no parsing)
@@ -218,12 +153,10 @@ jobs:
               # 2. Send "Running" status  
               send_webhook "$test_id" "Running" "0" ""
               
-              # 3. Run the test and capture output
+              # Fix 4: Proper Raw Output Capture
               start_time=$(date +%s)
+              echo "▶️ Executing: python -m pytest -v -k \"$test_id\" --tb=long"
               
-              echo "▶️  Executing: python -m pytest -v -k \"$test_id\" --tb=long"
-              
-              # SIMPLIFIED: Just capture raw output, no analysis
               if python -m pytest -v -k "$test_id" --tb=long \
                   --junit-xml="test-results/junit-${test_id}.xml" \
                   --json-report --json-report-file="test-results/json-${test_id}.json" \
@@ -234,10 +167,9 @@ jobs:
               else
                   exit_code=$?
                   
-                  # SIMPLIFIED: Basic status determination only
                   if [ $exit_code -eq 5 ] || grep -q "collected 0 items" "$test_output_file"; then
                       test_status="Not Found"
-                      echo "⚠️  Test implementation NOT FOUND: $test_id"
+                      echo "⚠️ Test implementation NOT FOUND: $test_id"
                   else
                       test_status="Failed"
                       echo "❌ Test FAILED: $test_id (exit code: $exit_code)"
@@ -247,13 +179,13 @@ jobs:
               end_time=$(date +%s)
               duration=$((end_time - start_time))
               
-              # Read raw output for frontend parsing
+              # Read raw output safely
               raw_output=""
               if [ -f "$test_output_file" ]; then
                   raw_output=$(cat "$test_output_file")
               fi
               
-              # 4. Send final result with raw output
+              # Send final result with raw output
               send_webhook "$test_id" "$test_status" "$duration" "$raw_output"
               
               echo "📊 Test completed: $test_id -> $test_status (${duration}s)"
