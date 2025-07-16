@@ -100,13 +100,15 @@ jobs:
               local test_id="$1"
               local status="$2"
               local duration="$3"
-              local raw_output="$4"
+              local raw_output_unescaped="$4" # Get the unescaped raw output
+              # JSON escape it for embedding into Python string literal
+              local raw_output_escaped=$(printf "%s" "$raw_output_unescaped" | jq -Rs .)
               
               echo "📡 Sending webhook: $test_id -> $status"
               
               if [ -n "$CALLBACK_URL" ]; then
                   # Create webhook payload with proper JSON escaping
-                  python3 -c "import json; import sys; import os; data = { 'requestId': os.environ.get('REQUEST_ID', ''), 'timestamp': '$(date -u +"%Y-%m-%dT%H:%M:%SZ")', 'results': [{'id': '$test_id', 'name': 'Test $test_id', 'status': '$status', 'duration': $duration, 'logs': 'Basic execution info', 'rawOutput': '''$raw_output'''}]}; with open('webhook_${test_id}_${status}.json', 'w') as f: json.dump(data, f, indent=2);"
+                  python3 -c "import json; import sys; import os; data = { 'requestId': os.environ.get('REQUEST_ID', ''), 'timestamp': '$(date -u +"%Y-%m-%dT%H:%M:%SZ")', 'results': [{'id': '$test_id', 'name': 'Test $test_id', 'status': '$status', 'duration': $duration, 'logs': 'Basic execution info', 'rawOutput': ${raw_output_escaped} }]}; with open('webhook_${test_id}_${status}.json', 'w') as f: json.dump(data, f, indent=2);"
                   
                   # Send webhook
                   HTTP_CODE=$(curl -w "%{http_code}" -o "response_${test_id}_${status}.txt" \
@@ -133,7 +135,8 @@ jobs:
               fi
               
               # Update consolidated results
-              python3 -c "import json; import os; import time; try: with open('current_results.json', 'r') as f: payload = json.load(f); except: payload = { 'requirementId': os.environ.get('REQUIREMENT_ID', ''), 'requestId': os.environ.get('REQUEST_ID', ''), 'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'results': [] }; test_id = '$test_id'; status = '$status'; duration = $duration; raw_output = '''$raw_output'''; updated = False; for result in payload['results']: if result['id'] == test_id: result['status'] = status; result['duration'] = duration; result['logs'] = f'Test {status.lower()}'; result['rawOutput'] = raw_output; updated = True; break; if not updated: payload['results'].append({'id': test_id, 'name': f'Test {test_id}', 'status': status, 'duration': duration, 'logs': f'Test {status.lower()}', 'rawOutput': raw_output}); payload['timestamp'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()); with open('current_results.json', 'w') as f: json.dump(payload, f, indent=2); print(f'Updated results: {test_id} -> {status}');"
+              # Use the JSON-escaped raw_output_escaped directly
+              python3 -c "import json; import os; import time; try: with open('current_results.json', 'r') as f: payload = json.load(f); except: payload = { 'requirementId': os.environ.get('REQUIREMENT_ID', ''), 'requestId': os.environ.get('REQUEST_ID', ''), 'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'results': [] }; test_id = '$test_id'; status = '$status'; duration = $duration; raw_output = ${raw_output_escaped}; updated = False; for result in payload['results']: if result['id'] == test_id: result['status'] = status; result['duration'] = duration; result['logs'] = f'Test {status.lower()}'; result['rawOutput'] = raw_output; updated = True; break; if not updated: payload['results'].append({'id': test_id, 'name': f'Test {test_id}', 'status': status, 'duration': duration, 'logs': f'Test {status.lower()}', 'rawOutput': raw_output}); payload['timestamp'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()); with open('current_results.json', 'w') as f: json.dump(payload, f, indent=2); print(f'Updated results: {test_id} -> {status}');"
           }
           
           # SIMPLIFIED: Process each test with 3 webhook calls (no parsing)
