@@ -1,4 +1,4 @@
-name: Quality Tracker Test Execution - Phase 1 Clean
+name: Quality Tracker Test Execution - Enhanced with JUnit XML
 
 on:
   repository_dispatch:
@@ -38,7 +38,7 @@ jobs:
           echo "🔗 GitHub Run ID: $GITHUB_RUN_ID"
           echo "📝 Request ID: $REQUEST_ID"
           echo "📡 Callback URL: $CALLBACK_URL"
-          echo "✨ Phase 1: Raw data only - frontend parsing"
+          echo "✨ Enhanced: JUnit XML parsing + raw data capture"
 
       - name: Initialize results
         run: |
@@ -76,7 +76,7 @@ jobs:
 
       - name: Run tests
         run: |
-          echo "🚀 Starting test execution..."
+          echo "🚀 Starting enhanced test execution..."
           
           # Parse test IDs
           IFS=' ' read -ra TEST_ARRAY <<< "$TEST_CASE_IDS"
@@ -85,22 +85,26 @@ jobs:
           echo "📊 Total tests: $TOTAL_TESTS"
           mkdir -p test-results
           
-          # Webhook sender function
-          send_webhook() {
+          # Enhanced webhook sender function with JUnit XML parsing
+          send_enhanced_webhook() {
               local test_id="$1"
               local status="$2"
               local duration="$3"
               local raw_output="$4"
+              local junit_file="$5"
               
-              echo "📡 Webhook: $test_id -> $status"
+              echo "📡 Enhanced Webhook: $test_id -> $status"
               
               if [ -n "$CALLBACK_URL" ]; then
-                  # Create webhook payload
+                  # Create enhanced webhook payload with JUnit XML parsing
                   python3 -c "
           import json
           import os
           import time
+          import xml.etree.ElementTree as ET
+          import re
 
+          # Base webhook data (existing structure)
           data = {
               'requestId': os.environ.get('REQUEST_ID', ''),
               'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
@@ -114,15 +118,156 @@ jobs:
               }]
           }
 
+          # Parse JUnit XML for enhanced failure data
+          junit_file = '$junit_file'
+          if junit_file and os.path.exists(junit_file) and '$status' == 'Failed':
+              try:
+                  print(f'🔍 Parsing JUnit XML: {junit_file}')
+                  
+                  tree = ET.parse(junit_file)
+                  root = tree.getroot()
+                  
+                  # Find the specific test case
+                  test_case_element = None
+                  for testsuite in root.findall('.//testsuite'):
+                      for testcase in testsuite.findall('testcase'):
+                          test_name = testcase.get('name', '')
+                          if '$test_id' in test_name or test_name.endswith('$test_id'):
+                              test_case_element = testcase
+                              break
+                      if test_case_element is not None:
+                          break
+                  
+                  if test_case_element is not None:
+                      print(f'✅ Found test case in JUnit XML: {test_case_element.get(\"name\")}')
+                      
+                      # Extract basic test info
+                      classname = test_case_element.get('classname', '')
+                      method_name = test_case_element.get('name', '')
+                      file_path = test_case_element.get('file', '')
+                      line_num = test_case_element.get('line', '0')
+                      test_time = test_case_element.get('time', '0')
+                      
+                      # Check for failure element
+                      failure_element = test_case_element.find('failure')
+                      if failure_element is not None:
+                          failure_type = failure_element.get('type', 'TestFailure')
+                          failure_message = failure_element.get('message', '')
+                          failure_content = failure_element.text or ''
+                          
+                          print(f'🚨 Failure detected: {failure_type} - {failure_message}')
+                          
+                          # Create enhanced failure object
+                          failure_data = {
+                              'type': failure_type,
+                              'message': failure_message,
+                              'file': file_path.split('/')[-1] if file_path else '',
+                              'line': int(line_num) if line_num.isdigit() else 0,
+                              'classname': classname,
+                              'method': method_name,
+                              'stackTrace': failure_content,
+                              'parsingSource': 'junit-xml',
+                              'parsingConfidence': 'high'
+                          }
+                          
+                          # Parse assertion details for assertion errors
+                          if 'assert' in failure_message.lower() or failure_type == 'AssertionError':
+                              print(f'🔍 Parsing assertion: {failure_message}')
+                              
+                              # Pattern 1: Simple assert like 'assert 1 == 2'
+                              assert_match = re.search(r'assert\\s+(.+?)\\s*(==|!=|<|>|<=|>=)\\s*(.+?)(?:\\s|$)', failure_message)
+                              
+                              if assert_match:
+                                  actual = assert_match.group(1).strip()
+                                  operator = assert_match.group(2)
+                                  expected = assert_match.group(3).strip()
+                                  
+                                  failure_data['assertion'] = {
+                                      'available': True,
+                                      'expression': failure_message,
+                                      'actual': actual,
+                                      'expected': expected,
+                                      'operator': operator
+                                  }
+                                  failure_data['category'] = 'assertion'
+                                  print(f'✅ Assertion parsed: {actual} {operator} {expected}')
+                              else:
+                                  # Pattern 2: Look in stack trace for more assertion details
+                                  stack_assert_match = re.search(r'assert\\s+(.+?)\\s*(==|!=|<|>|<=|>=)\\s*(.+?)(?:\\n|$)', failure_content)
+                                  if stack_assert_match:
+                                      actual = stack_assert_match.group(1).strip()
+                                      operator = stack_assert_match.group(2)
+                                      expected = stack_assert_match.group(3).strip()
+                                      
+                                      failure_data['assertion'] = {
+                                          'available': True,
+                                          'expression': failure_message,
+                                          'actual': actual,
+                                          'expected': expected,
+                                          'operator': operator
+                                      }
+                                      failure_data['category'] = 'assertion'
+                                      print(f'✅ Assertion parsed from stack: {actual} {operator} {expected}')
+                                  else:
+                                      # Basic assertion without clear expected/actual
+                                      failure_data['assertion'] = {
+                                          'available': True,
+                                          'expression': failure_message,
+                                          'actual': '',
+                                          'expected': '',
+                                          'operator': ''
+                                      }
+                                      failure_data['category'] = 'assertion'
+                          else:
+                              # Categorize other failure types
+                              if 'timeout' in failure_type.lower() or 'timeout' in failure_message.lower():
+                                  failure_data['category'] = 'timeout'
+                              elif 'element' in failure_type.lower() or 'element' in failure_message.lower():
+                                  failure_data['category'] = 'element'
+                              elif 'network' in failure_type.lower() or 'connection' in failure_message.lower():
+                                  failure_data['category'] = 'network'
+                              else:
+                                  failure_data['category'] = 'general'
+                          
+                          # Add failure data to webhook
+                          data['results'][0]['failure'] = failure_data
+                          
+                          # Add execution metadata
+                          data['results'][0]['execution'] = {
+                              'framework': 'pytest',
+                              'testSuite': classname,
+                              'totalTime': float(test_time) if test_time else 0,
+                              'junitSource': True
+                          }
+                          
+                          # Add framework detection
+                          data['results'][0]['framework'] = {
+                              'name': 'pytest',
+                              'detected': True,
+                              'junitSupported': True
+                          }
+                          
+                          print(f'✅ Enhanced webhook data prepared with JUnit XML parsing')
+                      else:
+                          print(f'ℹ️ No failure element found in JUnit XML for passed test')
+                  else:
+                      print(f'⚠️ Test case not found in JUnit XML: $test_id')
+              except Exception as e:
+                  print(f'❌ JUnit XML parsing failed: {e}')
+                  print(f'📄 Continuing with raw output only')
+
+          # Write webhook payload
           with open('webhook_${test_id}_${status}.json', 'w') as f:
               json.dump(data, f, indent=2)
+          
+          print(f'📄 Webhook payload written: webhook_${test_id}_${status}.json')
           "
                   
                   # Send webhook
                   HTTP_CODE=$(curl -w "%{http_code}" -o "response_${test_id}_${status}.txt" \
                     -X POST \
                     -H "Content-Type: application/json" \
-                    -H "User-Agent: GitHub-Actions-Quality-Tracker" \
+                    -H "User-Agent: GitHub-Actions-Quality-Tracker-Enhanced" \
                     -H "X-GitHub-Run-ID: $GITHUB_RUN_ID" \
                     -H "X-Request-ID: $REQUEST_ID" \
                     -d @"webhook_${test_id}_${status}.json" \
@@ -131,9 +276,9 @@ jobs:
                     -s)
                   
                   if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-                    echo "✅ Webhook sent (HTTP $HTTP_CODE)"
+                    echo "✅ Enhanced webhook sent (HTTP $HTTP_CODE)"
                   else
-                    echo "❌ Webhook failed (HTTP $HTTP_CODE)"
+                    echo "❌ Enhanced webhook failed (HTTP $HTTP_CODE)"
                   fi
                   
                   sleep 0.5
@@ -189,7 +334,7 @@ jobs:
           with open('current_results.json', 'w') as f:
               json.dump(payload, f, indent=2)
 
-          print(f'📝 Updated: {test_id} -> {status}')
+          print(f'📝 Updated consolidated results: {test_id} -> {status}')
           "
           }
           
@@ -203,19 +348,20 @@ jobs:
               echo "🧪 [$CURRENT_TEST/$TOTAL_TESTS] Test: $test_id"
               
               output_file="test-results/output-${test_id}.log"
+              junit_file="test-results/junit-${test_id}.xml"
               
               # 1. Not Started
-              send_webhook "$test_id" "Not Started" "0" ""
+              send_enhanced_webhook "$test_id" "Not Started" "0" "" ""
               
               # 2. Running
-              send_webhook "$test_id" "Running" "0" ""
+              send_enhanced_webhook "$test_id" "Running" "0" "" ""
               
-              # 3. Execute test
+              # 3. Execute test with JUnit XML generation
               start_time=$(date +%s)
-              echo "▶️ pytest -v -k \"$test_id\" --tb=long"
+              echo "▶️ pytest -v -k \"$test_id\" --tb=long --junit-xml=\"$junit_file\""
               
               if python -m pytest -v -k "$test_id" --tb=long \
-                  --junit-xml="test-results/junit-${test_id}.xml" \
+                  --junit-xml="$junit_file" \
                   --json-report --json-report-file="test-results/json-${test_id}.json" \
                   > "$output_file" 2>&1; then
                   
@@ -254,15 +400,21 @@ jobs:
           ")
               fi
               
-              # 4. Final result
-              send_webhook "$test_id" "$test_status" "$duration" "$raw_output"
+              # 4. Final result with enhanced data
+              send_enhanced_webhook "$test_id" "$test_status" "$duration" "$raw_output" "$junit_file"
               
               echo "📊 Completed: $test_id -> $test_status (${duration}s)"
+              
+              # Show JUnit XML status
+              if [ -f "$junit_file" ] && [ "$test_status" = "Failed" ]; then
+                  echo "🔍 JUnit XML generated for failure analysis"
+              fi
+              
               sleep 1
           done
           
           echo ""
-          echo "🏁 All tests completed! Webhooks sent: $((TOTAL_TESTS * 3))"
+          echo "🏁 All tests completed! Enhanced webhooks sent: $((TOTAL_TESTS * 3))"
         continue-on-error: true
 
       - name: Generate final results
@@ -279,19 +431,25 @@ jobs:
             echo "❌ No results file found"
           fi
           
-          # Generate summary
+          # Generate enhanced summary
           python3 -c "
           import json
           import os
           from datetime import datetime
 
           summary = {
-              'executionMode': 'phase1-raw-data',
+              'executionMode': 'enhanced-junit-xml',
               'requestId': os.environ.get('REQUEST_ID', ''),
               'requirementId': os.environ.get('REQUIREMENT_ID', ''),
               'timestamp': datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
               'githubRunId': os.environ.get('GITHUB_RUN_ID', ''),
-              'note': 'Phase 1: Raw data capture for frontend parsing'
+              'note': 'Enhanced: JUnit XML parsing + raw data capture',
+              'features': {
+                  'junitXmlParsing': True,
+                  'assertionExtraction': True,
+                  'enhancedFailureData': True,
+                  'frameworkDetection': True
+              }
           }
 
           if os.path.exists('current_results.json'):
@@ -310,22 +468,23 @@ jobs:
               summary['webhooksPerTest'] = 3
               summary['totalWebhooks'] = len(results) * 3
               
-              print(f'📋 Summary:')
+              print(f'📋 Enhanced Summary:')
               print(f'  Total Tests: {len(results)}')
-              print(f'  Total Webhooks: {len(results) * 3}')
+              print(f'  Enhanced Webhooks: {len(results) * 3}')
+              print(f'  JUnit XML Parsing: Enabled')
               for status, count in status_counts.items():
                   print(f'  {status}: {count}')
 
           with open('execution_summary.json', 'w') as f:
               json.dump(summary, f, indent=2)
 
-          print('✅ Summary generated')
+          print('✅ Enhanced summary generated')
           "
           
-          # Cleanup
+          # Enhanced cleanup
           echo "🧹 Cleaning up..."
           rm -f webhook_*.json response_*.txt
-          echo "✅ Cleanup done"
+          echo "✅ Cleanup done (JUnit XML files preserved in artifacts)"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -340,12 +499,12 @@ jobs:
           
       - name: Summary
         run: |
-          echo "## 🎯 Phase 1 Test Execution Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 🎯 Enhanced Test Execution Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Requirement:** $REQUIREMENT_ID - $REQUIREMENT_NAME" >> $GITHUB_STEP_SUMMARY
           echo "**Request ID:** $REQUEST_ID" >> $GITHUB_STEP_SUMMARY
           echo "**Test Cases:** $TEST_CASE_IDS" >> $GITHUB_STEP_SUMMARY
-          echo "**Mode:** Phase 1 - Raw data capture" >> $GITHUB_STEP_SUMMARY
+          echo "**Mode:** Enhanced - JUnit XML parsing + raw data" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [ -f current_results.json ]; then
@@ -372,9 +531,10 @@ jobs:
                   }.get(status, '❓')
                   print(f'- {emoji} **{status}:** {count}')
                   
-              print(f'- 📡 **Webhooks:** {len(results) * 3} (3 per test)')
-              print(f'- 📦 **Raw Data:** Captured for frontend parsing')
-              print(f'- ⚡ **Phase 1:** Simplified workflow execution')
+              print(f'- 📡 **Enhanced Webhooks:** {len(results) * 3} (3 per test)')
+              print(f'- 🔍 **JUnit XML Parsing:** Enabled for precise failure analysis')
+              print(f'- 📦 **Raw Data + Structured Data:** Best of both worlds')
+              print(f'- ⚡ **Enhanced:** Assertion extraction, file/line info, categorization')
           except Exception as e:
               print(f'- ❌ Error: {e}')
           " >> $GITHUB_STEP_SUMMARY
@@ -383,9 +543,10 @@ jobs:
           fi
           
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Phase 1 Features:**" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Simplified:** Focus on execution only" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Framework Agnostic:** No parsing assumptions" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Raw Output:** Complete test output preserved" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Frontend Parsing:** Deterministic error analysis" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Faster:** Reduced processing overhead" >> $GITHUB_STEP_SUMMARY
+          echo "**Enhancement Features:**" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **JUnit XML Parsing:** Precise assertion extraction" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Enhanced Failure Data:** Type, file, line, stack trace" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Assertion Analysis:** Automatic expected/actual extraction" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Failure Categorization:** Assertion, timeout, element, network" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Framework Detection:** Pytest support with expansion ready" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Backward Compatible:** Raw output preserved for fallback" >> $GITHUB_STEP_SUMMARY
