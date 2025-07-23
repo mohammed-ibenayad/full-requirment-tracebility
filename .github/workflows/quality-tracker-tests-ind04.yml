@@ -447,4 +447,4 @@ jobs:
           echo "- ✅ **Simplified Workflow:** No complex inline XML parsing" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ **Consistent Architecture:** Unified processing between webhook and polling" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ **Better Error Handling:** Frontend can gracefully handle parsing failures" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Easier Debugging:** Raw XML visible in browser dev tools" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Easier Debugging:** Raw XML visible in browser dev tools" >> $GITHUB_STEP_SUMMARY 
